@@ -4,12 +4,15 @@ import { ShotAudio } from '../audio/ShotAudio';
 import { COLORS, PAPER, PISTOL, WORLD } from '../tuning';
 import type { Preferences, SceneCallbacks } from '../bridge';
 import { screenToWorld } from '../coordinates';
+import { PlatformController } from '../physics/PlatformController';
+import { getDemoPlatforms } from '../platforms/demoPlatforms';
 
 type Fragment = { image: Phaser.GameObjects.Image; vx: number; vy: number; spin: number; life: number; duration: number; frame: string };
 type Dust = { x: number; y: number; vx: number; vy: number; life: number; duration: number; size: number; color: number };
 
 export class FirstScene extends Phaser.Scene {
   private surface!: DestructiblePage;
+  private controller!: PlatformController;
   private actor!: Phaser.GameObjects.Container;
   private arm!: Phaser.GameObjects.Graphics;
   private feet!: Phaser.GameObjects.Graphics;
@@ -20,7 +23,6 @@ export class FirstScene extends Phaser.Scene {
   private fragments: Fragment[] = [];
   private dust: Dust[] = [];
   private keys = new Set<string>();
-  private playerX = 350;
   private aim = { x: 825, y: 220 };
   private inside = false;
   private shotTime = -1000;
@@ -32,6 +34,9 @@ export class FirstScene extends Phaser.Scene {
   private paused = false;
   private phase = 0;
 
+  get playerX() { return this.controller ? this.controller.x : 350; }
+  get playerY() { return this.controller ? this.controller.y : WORLD.floor - 4; }
+
   constructor(private prefs: Preferences, private callbacks: SceneCallbacks) { super('FirstScene'); }
 
   preload() { this.load.spritesheet('industrial', '/assets/industrial.png', { frameWidth: 16, frameHeight: 16 }); }
@@ -39,13 +44,19 @@ export class FirstScene extends Phaser.Scene {
   create() {
     this.buildWorld();
     this.surface = new DestructiblePage(this);
+    this.controller = new PlatformController({
+      floorY: WORLD.floor - 4,
+      worldBounds: { minX: 48, maxX: 1104 },
+      platforms: getDemoPlatforms(),
+      isSolid: (x, y) => this.surface.hit(x, y),
+    }, 350, WORLD.floor - 4);
     this.buildPlayer();
     this.effects = this.add.graphics().setDepth(50);
     this.reticle = this.add.graphics().setDepth(60);
     this.audio.setMuted(this.prefs.muted);
     const canvas = this.game.canvas;
     canvas.tabIndex = 0;
-    canvas.setAttribute('aria-label', 'Escenario destructible. Ratón para apuntar, clic para disparar. A y D para moverte. R reinicia, M silencia y Escape pausa.');
+    canvas.setAttribute('aria-label', 'Escenario destructible con plataformas. Ratón para apuntar, clic para disparar. A/D para moverte, W o Espacio para saltar, S para bajar de plataformas. R reinicia, M silencia y Escape pausa.');
     canvas.addEventListener('keydown', this.onKeyDown);
     canvas.addEventListener('pointerenter', this.onEnter);
     canvas.addEventListener('pointerleave', this.onLeave);
@@ -79,9 +90,11 @@ export class FirstScene extends Phaser.Scene {
   private onLeave = () => { this.inside = false; this.keys.clear(); };
   private onContextMenu = (event: Event) => event.preventDefault();
   private onKeyDown = (event: KeyboardEvent) => {
-    if (!['KeyA', 'KeyD', 'ArrowLeft', 'ArrowRight', 'KeyR', 'KeyM', 'Escape'].includes(event.code)) return;
+    const handled = ['KeyA', 'KeyD', 'ArrowLeft', 'ArrowRight', 'KeyW', 'ArrowUp', 'Space', 'KeyS', 'ArrowDown', 'KeyR', 'KeyM', 'Escape'];
+    if (!handled.includes(event.code)) return;
     event.preventDefault(); this.keys.add(event.code);
     if (event.repeat) return;
+    if (['KeyW', 'ArrowUp', 'Space'].includes(event.code)) this.controller?.requestJump();
     if (event.code === 'KeyR') this.resetLevel();
     if (event.code === 'KeyM') this.callbacks.toggleMute();
     if (event.code === 'Escape') this.setPaused(!this.paused);
@@ -139,7 +152,7 @@ export class FirstScene extends Phaser.Scene {
   }
 
   private buildPlayer() {
-    this.shadow = this.add.ellipse(this.playerX, WORLD.floor - 2, 46, 8, 0x000000, 0.42).setDepth(19);
+    this.shadow = this.add.ellipse(this.controller.x, WORLD.floor - 2, 46, 8, 0x000000, 0.42).setDepth(19);
     const body = this.add.graphics();
     body.fillStyle(0x101b24).fillRect(-15, -47, 30, 46);
     body.fillStyle(0x956735).fillRect(-17, -29, 8, 22);
@@ -149,7 +162,7 @@ export class FirstScene extends Phaser.Scene {
     body.fillStyle(COLORS.cyan).fillRect(2, -38, 11, 4);
     body.fillStyle(0x805e37).fillRect(-8, -26, 17, 3);
     this.feet = this.add.graphics();
-    this.actor = this.add.container(this.playerX, WORLD.floor - 4, [body, this.feet]).setDepth(30);
+    this.actor = this.add.container(this.controller.x, this.controller.y, [body, this.feet]).setDepth(30);
     this.arm = this.add.graphics().setDepth(31);
   }
 
@@ -158,10 +171,10 @@ export class FirstScene extends Phaser.Scene {
     if (now - this.shotTime < PISTOL.cooldown) return;
     this.shotTime = now;
     this.shots++;
-    const angle = Math.atan2(this.aim.y - (WORLD.floor - 30), this.aim.x - this.playerX);
-    const mx = this.playerX + Math.cos(angle) * 37, my = WORLD.floor - 30 + Math.sin(angle) * 37;
-    // Aiming into the page is a depth-plane hit: the pointer selects the surface.
-    // The CPU mask rejects holes. Foreground platform raycasts belong to the next milestone.
+    const shoulderY = this.controller.y - 28;
+    const angle = Math.atan2(this.aim.y - shoulderY, this.aim.x - this.controller.x);
+    const mx = this.controller.x + Math.cos(angle) * 37, my = shoulderY + Math.sin(angle) * 37;
+    // Aiming into the page checks whether the targeted point is solid
     const hit = this.surface.hit(this.aim.x, this.aim.y);
     this.lastShot = { ...this.aim, mx, my, hit };
     if (hit) {
@@ -197,28 +210,77 @@ export class FirstScene extends Phaser.Scene {
   private clearEffects() { while (this.fragments.length) this.removeFragment(0); this.dust = []; this.lastShot = undefined; this.effects?.clear(); }
   resetLevel() {
     this.clearEffects(); this.audio.stop(); this.surface.reset(); this.keys.clear();
-    this.shots = 0; this.hits = 0; this.shotTime = -1000; this.playerX = 350; this.phase = 0; this.paused = false; this.resets++; this.notify();
+    this.shots = 0; this.hits = 0; this.shotTime = -1000;
+    this.controller.reset(350, WORLD.floor - 4);
+    this.phase = 0; this.paused = false; this.resets++; this.notify();
   }
 
-  snapshot() { return { shots: this.shots, hits: this.hits, percent: this.surface?.mask.percent, removed: this.surface?.mask.removedCount, fragments: this.fragments.length, objects: this.children.length, sourceFrames: this.surface?.source.getFrameNames(true).length, resets: this.resets, playerX: this.playerX, paused: this.paused, muted: this.prefs.muted, reducedMotion: this.prefs.reducedMotion }; }
+  snapshot() {
+    return {
+      shots: this.shots,
+      hits: this.hits,
+      percent: this.surface?.mask.percent,
+      removed: this.surface?.mask.removedCount,
+      fragments: this.fragments.length,
+      objects: this.children.length,
+      sourceFrames: this.surface?.source.getFrameNames(true).length,
+      resets: this.resets,
+      playerX: this.controller ? this.controller.x : 350,
+      playerY: this.controller ? this.controller.y : WORLD.floor - 4,
+      playerVy: this.controller ? this.controller.vy : 0,
+      onGround: this.controller ? this.controller.onGround : true,
+      platform: this.controller ? this.controller.currentPlatformId : 'catwalk',
+      paused: this.paused,
+      muted: this.prefs.muted,
+      reducedMotion: this.prefs.reducedMotion,
+    };
+  }
   solid(x: number, y: number) { return this.surface.hit(x, y); }
 
   update(_time: number, delta: number) {
     if (!this.surface || this.paused) return;
     const dt = Math.min(delta, 32) / 1000;
     const movement = Number(this.keys.has('KeyD') || this.keys.has('ArrowRight')) - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft'));
-    this.playerX = Phaser.Math.Clamp(this.playerX + movement * 185 * dt, 48, 1104);
-    this.phase += Math.abs(movement) * dt * 16;
-    this.actor.x = this.playerX; this.shadow.x = this.playerX;
-    const direction = this.aim.x < this.playerX ? -1 : 1;
+    const jump = this.keys.has('KeyW') || this.keys.has('ArrowUp') || this.keys.has('Space');
+    const drop = this.keys.has('KeyS') || this.keys.has('ArrowDown');
+
+    this.controller.update({ moveX: movement, jump, drop, dt });
+
+    if (this.controller.onGround) {
+      this.phase += Math.abs(movement) * dt * 16;
+    }
+    this.actor.setPosition(this.controller.x, this.controller.y);
+
+    // Dynamic shadow projected on ground or platform below
+    const ground = this.controller.findGroundBelow();
+    this.shadow.x = this.controller.x;
+    this.shadow.y = ground.y + 1;
+    const heightAboveGround = Math.max(0, ground.y - this.controller.y);
+    const shadowScale = Phaser.Math.Clamp(1 - heightAboveGround / 220, 0.35, 1);
+    this.shadow.setScale(shadowScale, shadowScale * 0.7);
+    this.shadow.setAlpha(0.42 * shadowScale);
+
+    const direction = this.aim.x < this.controller.x ? -1 : 1;
     this.actor.scaleX = direction;
-    this.feet.clear().fillStyle(0x263746).fillRect(-9, -7, 7, 9).fillRect(3, -7, 7, 9);
-    const stride = movement ? Math.round(Math.sin(this.phase) * 3) : 0;
-    this.feet.fillStyle(0xffb454).fillRect(-11 + stride, 0, 11, 4).fillRect(2 - stride, 0, 11, 4);
-    const angle = Math.atan2(this.aim.y - (WORLD.floor - 30), this.aim.x - this.playerX);
+
+    // Feet animation: walking stride on ground vs dynamic airborne pose
+    this.feet.clear();
+    if (this.controller.onGround) {
+      this.feet.fillStyle(0x263746).fillRect(-9, -7, 7, 9).fillRect(3, -7, 7, 9);
+      const stride = movement ? Math.round(Math.sin(this.phase) * 3) : 0;
+      this.feet.fillStyle(0xffb454).fillRect(-11 + stride, 0, 11, 4).fillRect(2 - stride, 0, 11, 4);
+    } else {
+      const isRising = this.controller.vy < 0;
+      const yOff = isRising ? -2 : 2;
+      this.feet.fillStyle(0x263746).fillRect(-9, -7 + yOff, 7, 9).fillRect(3, -7 + yOff, 7, 9);
+      this.feet.fillStyle(0xffb454).fillRect(-10, yOff, 10, 4).fillRect(2, yOff, 10, 4);
+    }
+
+    const shoulderY = this.controller.y - 28;
+    const angle = Math.atan2(this.aim.y - shoulderY, this.aim.x - this.controller.x);
     const elapsed = this.time.now - this.shotTime;
     const recoil = Math.max(0, 1 - elapsed / PISTOL.recovery) * 5;
-    this.arm.setPosition(this.playerX, WORLD.floor - 30).setRotation(angle).setScale(1, direction);
+    this.arm.setPosition(this.controller.x, shoulderY).setRotation(angle).setScale(1, direction);
     this.arm.clear().fillStyle(COLORS.ink).fillRect(4 - recoil, -6, 35, 12);
     this.arm.fillStyle(0x344d58).fillRect(14 - recoil, -7, 24, 8).fillRect(15 - recoil, 0, 7, 9);
     this.arm.fillStyle(COLORS.cyan).fillRect(19 - recoil, -5, 14, 2);
