@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "retrievedOn": "2026-10-15",
+  "timezone": "America/Bogota",
+  "packs": [
+    {
+      "id": "kenney-1bit-platformer",
+      "name": "1-Bit Platformer Pack",
+      "author": "Kenney",
+      "license": "CC0-1.0",
+      "canonicalUrl": "https://kenney.nl/assets/1-bit-platformer-pack",
+      "distribution": "Third-party mirror ETdoFresh/kenney.nl; original per-pack license retained",
+      "usage": "Selected technical scenery and silhouettes; visual curation pending scene integration"
+    },
+    {
+      "id": "kenney-pixel-ui",
+      "name": "Pixel UI Pack",
+      "author": "Kenney Vleugels, with help by Lynn Evers",
+      "license": "CC0-1.0",
+      "canonicalUrl": "https://kenney.nl/assets/pixel-ui-pack",
+      "distribution": "Third-party mirror ETdoFresh/kenney.nl; original per-pack license retained",
+      "usage": "Candidate 16px icons and panel details; no full atlas shipped to final game by default"
+    },
+    {
+      "id": "pixelify-sans",
+      "name": "Pixelify Sans",
+      "author": "The Pixelify Sans Project Authors",
+      "license": "OFL-1.1",
+      "canonicalUrl": "https://github.com/google/fonts/tree/1d0e46c7933245c8180fe83e47917961c913bbdb/ofl/pixelifysans",
+      "distribution": "Google Fonts official repository",
+      "usage": "Headings and short HUD labels; ordinary readable font for body copy"
+    }
+  ],
+  "files": [
+    {
+      "path": "sources/kenney-1bit-platformer/License.txt",
+      "pack": "kenney-1bit-platformer",
+      "downloadUrl": "https://raw.githubusercontent.com/ETdoFresh/kenney.nl/45df48c4d45f8716216b1a9e22df0b69cd9f5932/1bitplatformerpack/License.txt",
+      "sourceRevision": "45df48c4d45f8716216b1a9e22df0b69cd9f5932",
+      "sha256": "6b7a8a4a0ead2e525b0f0c6dea9bc88736787003896c5171e0d01cebcc35ceea",
+      "bytes": 610,
+      "modified": false
+    },
+    {
+      "path": "sources/kenney-1bit-platformer/atlas-transparent.png",
+      "pack": "kenney-1bit-platformer",
+      "downloadUrl": "https://raw.githubusercontent.com/ETdoFresh/kenney.nl/45df48c4d45f8716216b1a9e22df0b69cd9f5932/1bitplatformerpack/Tilemap/monochrome_tilemap_transparent_packed.png",
+      "sourceRevision": "45df48c4d45f8716216b1a9e22df0b69cd9f5932",
+      "sha256": "497c68067960694c11d1d678cf04e0e8a4778cc40bcefad822fe398364e0e204",
+      "bytes": 5230,
+      "modified": false,
+      "dimensions": {
+        "width": 320,
+        "height": 320
+      }
+    },
+    {
+      "path": "sources/kenney-1bit-platformer/sample.png",
+      "pack": "kenney-1bit-platformer",
+      "downloadUrl": "https://raw.githubusercontent.com/ETdoFresh/kenney.nl/45df48c4d45f8716216b1a9e22df0b69cd9f5932/1bitplatformerpack/Sample.png",
+      "sourceRevision": "45df48c4d45f8716216b1a9e22df0b69cd9f5932",
+      "sha256": "8c75c32272e1a993be91c58e1bfb71ca1238614aed9df8d1ea911f6aabe9ff39",
+      "bytes": 74211,
+      "modified": false,
+      "dimensions": {
+        "width": 918,
+        "height": 515
+      }
+    },
+    {
+      "path": "sources/kenney-pixel-ui/License.txt",
+      "pack": "kenney-pixel-ui",
+      "downloadUrl": "https://raw.githubusercontent.com/ETdoFresh/kenney.nl/45df48c4d45f8716216b1a9e22df0b69cd9f5932/pixeluipack/License.txt",
+      "sourceRevision": "45df48c4d45f8716216b1a9e22df0b69cd9f5932",
+      "sha256": "a74943fedd1a498f827bd020afcb11af71bc34036b91f6ae9c93825edbff2254",
+      "bytes": 643,
+      "modified": false
+    },
+    {
+      "path": "sources/kenney-pixel-ui/atlas-transparent.png",
+      "pack": "kenney-pixel-ui",
+      "downloadUrl": "https://raw.githubusercontent.com/ETdoFresh/kenney.nl/45df48c4d45f8716216b1a9e22df0b69cd9f5932/pixeluipack/Spritesheet/UIpackSheet_transparent.png",
+      "sourceRevision": "45df48c4d45f8716216b1a9e22df0b69cd9f5932",
+      "sha256": "38cd7cabd9667ace6bdd9f561a50f697359eb9460e80adbcdde7f2a3e71efb1a",
+      "bytes": 40423,
+      "modified": false,
+      "dimensions": {
+        "width": 538,
+        "height": 592
+      }
+    },
+    {
+      "path": "sources/kenney-pixel-ui/spritesheetInfo.txt",
+      "pack": "kenney-pixel-ui",
+      "downloadUrl": "https://raw.githubusercontent.com/ETdoFresh/kenney.nl/45df48c4d45f8716216b1a9e22df0b69cd9f5932/pixeluipack/Spritesheet/spritesheetInfo.txt",
+      "sourceRevision": "45df48c4d45f8716216b1a9e22df0b69cd9f5932",
+      "sha256": "746bf8d67eaa7e86d0859d8d6d880df43a6904e89c97fdb45881abf9d9b80b28",
+      "bytes": 97,
+      "modified": false
+    },
+    {
+      "path": "sources/pixelify-sans/OFL.txt",
+      "pack": "pixelify-sans",
+      "downloadUrl": "https://raw.githubusercontent.com/google/fonts/1d0e46c7933245c8180fe83e47917961c913bbdb/ofl/pixelifysans/OFL.txt",
+      "sourceRevision": "1d0e46c7933245c8180fe83e47917961c913bbdb",
+      "sha256": "b66ba46f511a851ab09998b5a5a9fdbb102545a3864cb993095e1745996873a7",
+      "bytes": 4488,
+      "modified": false
+    },
+    {
+      "path": "sources/pixelify-sans/PixelifySans-Variable.ttf",
+      "pack": "pixelify-sans",
+      "downloadUrl": "https://raw.githubusercontent.com/google/fonts/1d0e46c7933245c8180fe83e47917961c913bbdb/ofl/pixelifysans/PixelifySans%5Bwght%5D.ttf",
+      "sourceRevision": "1d0e46c7933245c8180fe83e47917961c913bbdb",
+      "sha256": "9ba86cd010a4de309d263ceff8e8044092c9db7efda869620cb9ff1c4389e8a5",
+      "bytes": 79160,
+      "modified": false
+    }
+  ]
+}
