@@ -81,7 +81,7 @@ export function App() {
 
       <div className="control-deck">
         <div className="weapon"><span className="weapon-key">01</span><svg className="pistol-icon" viewBox="0 0 48 32" aria-hidden="true"><path fill="currentColor" d="M5 5h32v3h7v10H23v3h-4v10H9V20H5z" /><path fill="#79e3d8" d="M14 9h22v3H14z" /><path fill="#101923" d="M12 21h4v6h-4z" /></svg><div><strong>Pistola</strong><span>SEMIAUTOMÁTICA</span></div><span className="infinite" title="Munición infinita">∞</span></div>
-        <div className="shortcuts"><span><kbd>A</kbd><kbd>D</kbd> Mover</span><span><Icon name="cross" /> Apuntar y disparar</span></div>
+        <div className="shortcuts"><span><kbd>A</kbd><kbd>D</kbd> Mover</span><span><kbd>W</kbd> Saltar</span><span><kbd>S</kbd> Bajar</span><span><Icon name="cross" /> Disparar</span></div>
         <div className="game-actions"><button className="icon-button" onClick={() => controls.current?.pause(!stats.paused)} disabled={!stats.ready} aria-label={stats.paused ? 'Continuar' : 'Pausar'} title="Pausa · Escape"><Icon name={stats.paused ? 'play' : 'pause'} /></button><button className="reset-button" onClick={reset} disabled={!stats.ready}><Icon name="reset" /><span>Reiniciar</span><kbd>R</kbd></button></div>
       </div>
     </section>
