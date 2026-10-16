@@ -77,3 +77,37 @@ test('real pointer input makes a hole, respects that hole, resets, and scales', 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
   expect(errors).toEqual([]); expect(failed).toEqual([]);
 });
+
+test('player jumps onto destructible platform and falls when destroyed underneath', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('canvas')).toHaveCount(1);
+  const canvas = page.locator('canvas');
+  await canvas.click();
+
+  // Initial state on catwalk
+  const initial = await snapshot(page);
+  expect(initial.playerY).toBe(530);
+  expect(initial.onGround).toBe(true);
+
+  // Jump with Space or W
+  await page.keyboard.press('Space');
+  // Wait brief moment for jump to ascend and land on footer-shelf (y = 451)
+  await expect.poll(async () => (await snapshot(page)).playerY).toBeLessThan(530);
+
+  // Wait for landing on the footer shelf (y = 451)
+  await expect.poll(async () => (await snapshot(page)).playerY, { timeout: 3000 }).toBe(451);
+  const onPlatform = await snapshot(page);
+  expect(onPlatform.onGround).toBe(true);
+  expect(onPlatform.platform).toBe('footer-shelf');
+
+  // Shoot the platform right under the player's position (x=350, y=451)
+  await fire(page, 350, 451);
+  await expect.poll(async () => (await snapshot(page)).hits).toBeGreaterThan(0);
+
+  // The platform was destroyed at this spot -> player should lose footing and fall back to catwalk (530)
+  await expect.poll(async () => (await snapshot(page)).playerY, { timeout: 3000 }).toBe(530);
+  const landedCatwalk = await snapshot(page);
+  expect(landedCatwalk.onGround).toBe(true);
+  expect(landedCatwalk.platform).toBe('catwalk');
+});
+
