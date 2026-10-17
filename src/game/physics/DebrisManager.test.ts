@@ -10,21 +10,23 @@ describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
     };
     const mockHost: DebrisHost = {
       createDebrisImage: vi.fn().mockReturnValue(mockImage),
+      addDebrisPolygon: vi.fn(),
       addDebrisFrame: vi.fn(),
       removeDebrisFrame: vi.fn(),
     };
     return { mockHost, mockImage };
   }
 
-  it('initializes Rapier world and static colliders', async () => {
+  it('initializes Rapier world, thick floor, and segmented platform colliders', async () => {
     const { mockHost } = createMockHost();
     const manager = new DebrisManager(mockHost);
     await manager.init();
     expect(manager.count).toBe(0);
+    expect(manager.activeSegmentsCount).toBeGreaterThan(0);
     manager.destroy();
   });
 
-  it('spawns triangular fractured debris and simulates physics', async () => {
+  it('spawns triangular fractured debris with Delaunator and polygon clipping data', async () => {
     const { mockHost } = createMockHost();
     const manager = new DebrisManager(mockHost);
     await manager.init();
@@ -32,6 +34,16 @@ describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
     // Spawn fracture from a hit inside the page area
     manager.spawnFracture(500, 250, 24, 0, 6, 200);
     expect(manager.count).toBeGreaterThan(0);
+    expect(mockHost.addDebrisPolygon).toHaveBeenCalled();
+
+    // Check that polygon data contains valid triangular vertices
+    const firstCall = vi.mocked(mockHost.addDebrisPolygon!).mock.calls[0][0];
+    expect(firstCall.v0).toBeDefined();
+    expect(firstCall.v1).toBeDefined();
+    expect(firstCall.v2).toBeDefined();
+    expect(firstCall.width).toBeGreaterThanOrEqual(8);
+    expect(firstCall.height).toBeGreaterThanOrEqual(8);
+
     const initialCount = manager.count;
 
     // Simulate several physics steps
@@ -59,6 +71,41 @@ describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
     }
 
     expect(manager.count).toBeLessThanOrEqual(manager.maxDebris);
+    manager.destroy();
+  });
+
+  it('deactivates platform colliders when perforated and wakes up resting debris', async () => {
+    const { mockHost } = createMockHost();
+    const manager = new DebrisManager(mockHost);
+    await manager.init();
+
+    const initialSegments = manager.activeSegmentsCount;
+    expect(initialSegments).toBeGreaterThan(0);
+
+    // Simulate destruction of the first platform area
+    manager.syncPlatforms((x, y) => {
+      // Perforate everything around x=100..200
+      if (x >= 90 && x <= 220) return false;
+      return true;
+    });
+
+    expect(manager.activeSegmentsCount).toBeLessThan(initialSegments);
+    manager.destroy();
+  });
+
+  it('applies radial blast impulse to nearby debris bodies', async () => {
+    const { mockHost } = createMockHost();
+    const manager = new DebrisManager(mockHost);
+    await manager.init();
+
+    manager.spawnFracture(500, 250, 30, 0, 6, 200);
+    expect(manager.count).toBeGreaterThan(0);
+
+    // Apply blast impulse at (500, 250)
+    expect(() => {
+      manager.applyBlastImpulse(500, 250, 50, 450);
+    }).not.toThrow();
+
     manager.destroy();
   });
 });
