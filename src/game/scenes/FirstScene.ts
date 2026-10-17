@@ -8,6 +8,7 @@ import { PlatformController } from '../physics/PlatformController';
 import { getDemoPlatforms } from '../platforms/demoPlatforms';
 import { WEAPONS, WEAPON_ORDER, calculateSpreadAngles } from '../weapons/weapons';
 import type { WeaponConfig } from '../weapons/types';
+import { DebrisManager } from '../physics/DebrisManager';
 
 type Fragment = { image: Phaser.GameObjects.Image; vx: number; vy: number; spin: number; life: number; duration: number; frame: string };
 type Dust = { x: number; y: number; vx: number; vy: number; life: number; duration: number; size: number; color: number };
@@ -17,6 +18,7 @@ type Grenade = { x: number; y: number; vx: number; vy: number; fuse: number; bla
 export class FirstScene extends Phaser.Scene {
   private surface!: DestructiblePage;
   private controller!: PlatformController;
+  private debrisManager!: DebrisManager;
   private actor!: Phaser.GameObjects.Container;
   private arm!: Phaser.GameObjects.Graphics;
   private feet!: Phaser.GameObjects.Graphics;
@@ -62,6 +64,19 @@ export class FirstScene extends Phaser.Scene {
     this.reticle = this.add.graphics().setDepth(60);
     this.audio.setMuted(this.prefs.muted);
 
+    this.debrisManager = new DebrisManager({
+      createDebrisImage: (x, y, frameKey) => {
+        return this.add.image(x, y, 'paper-source', frameKey).setDepth(26).setOrigin(0.5, 0.5);
+      },
+      addDebrisFrame: (frameKey, x, y, w, h) => {
+        this.surface.source.add(frameKey, 0, x, y, w, h);
+      },
+      removeDebrisFrame: (frameKey) => {
+        this.surface.source.remove(frameKey);
+      },
+    });
+    void this.debrisManager.init();
+
     const canvas = this.game.canvas;
     canvas.tabIndex = 0;
     canvas.setAttribute('aria-label', 'Escenario destructible con plataformas y arsenal. Ratón para apuntar, clic para disparar. A/D mover, W/Espacio saltar, S bajar. 1, 2, 3 o rueda para cambiar de arma. R reinicia, M silencia y Escape pausa.');
@@ -88,7 +103,7 @@ export class FirstScene extends Phaser.Scene {
       canvas.removeEventListener('wheel', this.onWheel);
       window.removeEventListener('keyup', this.onKeyUp); window.removeEventListener('blur', this.onBlur);
       document.removeEventListener('visibilitychange', this.onVisibility);
-      this.clearEffects(); this.audio.destroy();
+      this.clearEffects(); this.audio.destroy(); this.debrisManager?.destroy();
     });
     this.notify();
   }
@@ -298,6 +313,7 @@ export class FirstScene extends Phaser.Scene {
   }
 
   private emitImpact(x: number, y: number, angle: number, radius = 24, fragmentCount = 11) {
+    this.debrisManager?.spawnFracture(x, y, radius, angle, Math.min(8, Math.ceil(fragmentCount / 2)), 220);
     const count = this.prefs.reducedMotion ? Math.max(2, Math.floor(fragmentCount / 3)) : fragmentCount;
     for (let i = 0; i < count; i++) {
       if (this.fragments.length >= 80) this.removeFragment(0);
@@ -341,6 +357,7 @@ export class FirstScene extends Phaser.Scene {
   }
 
   private clearEffects() {
+    this.debrisManager?.reset();
     while (this.fragments.length) this.removeFragment(0);
     this.dust = [];
     this.grenades = [];
@@ -362,6 +379,7 @@ export class FirstScene extends Phaser.Scene {
       percent: this.surface?.mask.percent,
       removed: this.surface?.mask.removedCount,
       fragments: this.fragments.length,
+      debris: this.debrisManager ? this.debrisManager.count : 0,
       objects: this.children.length,
       sourceFrames: this.surface?.source.getFrameNames(true).length,
       resets: this.resets,
@@ -381,6 +399,7 @@ export class FirstScene extends Phaser.Scene {
 
   update(_time: number, delta: number) {
     if (!this.surface || this.paused) return;
+    this.debrisManager?.update();
     const dt = Math.min(delta, 32) / 1000;
     const movement = Number(this.keys.has('KeyD') || this.keys.has('ArrowRight')) - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft'));
     const jump = this.keys.has('KeyW') || this.keys.has('ArrowUp') || this.keys.has('Space');
