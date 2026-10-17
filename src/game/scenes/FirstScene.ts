@@ -198,45 +198,110 @@ export class FirstScene extends Phaser.Scene {
   }
 
   private buildWorld() {
-    this.cameras.main.setBackgroundColor('#0b1520');
+    this.cameras.main.setBackgroundColor('#081017');
     const g = this.add.graphics();
-    g.fillStyle(0x10232c).fillRect(24, 22, 1104, 488);
-    for (let x = 28; x < WORLD.width; x += 48) for (let y = 20; y < 530; y += 48) {
-      g.lineStyle(1, 0x79e3d8, 0.06).strokeRect(x, y, 48, 48);
-      g.fillStyle(0x42616b, 0.35).fillRect(x + 3, y + 3, 2, 2);
+    // Subterranean facility hull
+    g.fillStyle(0x0e1b26).fillRect(24, 22, 1104, 488);
+
+    // High-contrast cyber grid with cyan node points
+    for (let x = 28; x < WORLD.width; x += 48) {
+      for (let y = 20; y < 530; y += 48) {
+        g.lineStyle(1, 0x1d4658, 0.45).strokeRect(x, y, 48, 48);
+        g.fillStyle(0x00f5d4, 0.5).fillRect(x + 1, y + 1, 3, 3);
+      }
     }
-    for (let x = 70; x < 1152; x += 248) {
-      g.fillStyle(0x0b1620).fillRect(x, 20, 24, 510);
-      g.fillStyle(0x243b45).fillRect(x, 20, 4, 510);
-      for (let y = 32; y < 520; y += 64) g.fillStyle(0x44606a).fillRect(x + 8, y, 4, 4);
+
+    // Heavy vertical structural columns with illuminated cyan power bus lines
+    for (const x of [70, 290, 520, 760, 990]) {
+      g.fillStyle(0x08131d).fillRect(x, 20, 28, 510);
+      g.fillStyle(0x234d5f).fillRect(x, 20, 4, 510);
+      g.fillStyle(0x00e5ff, 0.75).fillRect(x + 12, 20, 4, 510);
+      for (let y = 32; y < 520; y += 48) {
+        g.fillStyle(0x79e3d8).fillRect(x + 5, y, 4, 4);
+      }
     }
-    for (const y of [140, 390]) {
-      g.fillStyle(0x0b151e).fillRect(30, y, 1080, 16);
-      g.fillStyle(0x37535c).fillRect(30, y, 1080, 5);
-      g.fillStyle(0x79e3d8, 0.32).fillRect(30, y + 6, 1080, 2);
-      for (let x = 60; x < 1100; x += 96) g.fillStyle(0x54666a).fillRect(x, y - 3, 6, 22);
+
+    // Heavy horizontal support girders with amber hazard stripes and glowing conduits
+    for (const y of [138, 388]) {
+      g.fillStyle(0x0a1620).fillRect(30, y, 1080, 22);
+      // Hazard diagonal stripes
+      for (let sx = 34; sx < 1100; sx += 24) {
+        g.fillStyle(0xffb454, 0.65).fillRect(sx, y + 2, 10, 6);
+      }
+      // Glowing cyan fiber trunk & amber steam pipe
+      g.fillStyle(0xff8c00).fillRect(30, y - 5, 1080, 4);
+      g.fillStyle(0x00f5d4).fillRect(30, y + 17, 1080, 3);
+      for (let x = 60; x < 1100; x += 96) {
+        g.fillStyle(0x406370).fillRect(x, y - 7, 8, 30);
+      }
     }
-    for (const x of [160, 500, 840]) {
-      g.fillStyle(0x080f18).fillRect(x - 8, 204, 172, 152);
-      g.fillStyle(0x233c46).fillRect(x, 210, 156, 136);
-      g.lineStyle(2, 0x3a5960).strokeRect(x, 210, 156, 136);
-      g.fillStyle(0x0c2028).fillRect(x + 10, 224, 136, 72);
-      for (let j = 0; j < 7; j++) g.fillStyle(0x79e3d8, 0.18 + j * 0.06).fillRect(x + 20 + j * 16, 278 - (j % 3) * 12, 8, 10 + (j % 3) * 12);
-      g.fillStyle(0x79e3d8).fillRect(x + 13, 313, 6, 6);
-      for (let j = 0; j < 4; j++) g.fillStyle(0x101e28).fillRect(x + 44, 309 + j * 7, 98, 3);
+
+    // Mainframe terminal consoles with vibrant multicolor status LEDs and diagnostic displays
+    for (const x of [150, 490, 830]) {
+      g.fillStyle(0x061118).fillRect(x - 8, 204, 184, 154);
+      g.fillStyle(0x1e3e4d).fillRect(x, 210, 168, 142);
+      g.lineStyle(2, 0x3d7085).strokeRect(x, 210, 168, 142);
+      g.fillStyle(0x0a222c).fillRect(x + 8, 218, 152, 78);
+
+      // Multicolored LED status array: cyan, amber, magenta, emerald
+      const ledColors = [0x00f5d4, 0xffb454, 0xff2a85, 0x00ff88, 0x00e5ff, 0xffd166, 0x7000ff];
+      for (let col = 0; col < 8; col++) {
+        for (let row = 0; row < 3; row++) {
+          const color = ledColors[(col + row * 2) % ledColors.length];
+          g.fillStyle(color, 0.85).fillRect(x + 18 + col * 17, 226 + row * 16, 10, 8);
+        }
+      }
+
+      // Telemetry frequency graph
+      g.lineStyle(1.5, 0x00f5d4, 0.9);
+      g.beginPath();
+      for (let j = 0; j < 9; j++) {
+        const px = x + 18 + j * 16;
+        const py = 282 - (j % 2 ? 10 : 2);
+        if (j === 0) g.moveTo(px, py);
+        else g.lineTo(px, py);
+      }
+      g.stroke();
+
+      // Lower status indicators
+      g.fillStyle(0x00f5d4).fillRect(x + 14, 316, 8, 8);
+      g.fillStyle(0xff8c00).fillRect(x + 26, 316, 8, 8);
+      for (let j = 0; j < 4; j++) {
+        g.fillStyle(0x193645).fillRect(x + 44, 312 + j * 6, 108, 3);
+      }
     }
-    for (const [x, y, frame] of [[747, 222, 267], [1044, 353, 268], [400, 329, 287], [109, 90, 267]]) {
-      this.add.image(x, y, 'industrial', frame).setScale(3).setTint(0x79e3d8).setAlpha(0.45);
+
+    // High-visibility machinery sprites from industrial tileset
+    for (const [x, y, frame] of [
+      [747, 222, 267], [1044, 353, 268], [400, 329, 287], [109, 90, 267],
+      [230, 260, 287], [630, 300, 267], [920, 260, 285],
+    ]) {
+      this.add.image(x, y, 'industrial', frame).setScale(3).setTint(0x00f5d4).setAlpha(0.85);
     }
-    this.add.text(775, 435, 'THE UNDERLAYER', { fontFamily: 'monospace', fontSize: '13px', color: '#548d91', letterSpacing: 4 });
+
+    // Illuminated industrial signage
+    this.add.text(760, 426, 'CORE REACTOR // SUB-LEVEL 01', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#00f5d4',
+      letterSpacing: 3,
+    });
+    this.add.text(760, 444, 'CONTAINMENT GRID • NOMINAL', {
+      fontFamily: 'monospace',
+      fontSize: '9px',
+      color: '#ffb454',
+      letterSpacing: 2,
+    });
+
+    // Catwalk floor construction
     g.fillStyle(0x050b12).fillRect(0, 530, 1152, 54);
     g.fillStyle(0x30414b).fillRect(0, 534, 1152, 4);
     for (let x = 0; x < 1152; x += 32) {
       g.fillStyle(0x1d2d37).fillRect(x, 546, 24, 3);
-      if (x < 192 || x > 960) g.fillStyle(0xffb454, 0.3).fillRect(x, 536, 14, 4);
+      if (x < 192 || x > 960) g.fillStyle(0xffb454, 0.45).fillRect(x, 536, 14, 4);
     }
     this.add.text(28, 563, 'SECTOR 01  /  CÁMARA DE PRUEBAS', { fontFamily: 'monospace', fontSize: '9px', color: '#647c89', letterSpacing: 2 });
-    this.add.text(1002, 563, 'CORE • ONLINE', { fontFamily: 'monospace', fontSize: '9px', color: '#79e3d8' });
+    this.add.text(1002, 563, 'CORE • ONLINE', { fontFamily: 'monospace', fontSize: '9px', color: '#00f5d4' });
   }
 
   private buildPlayer() {
@@ -316,7 +381,10 @@ export class FirstScene extends Phaser.Scene {
         }
       });
 
-      if (anyHit) this.hits++;
+      if (anyHit) {
+        this.hits++;
+        this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+      }
       this.lastShot = { time: now, flash: weapon.flash, weapon: 'shotgun', tracers };
       this.audio.shotgun(anyHit);
       this.notify();
