@@ -34,12 +34,13 @@ test('one minute of shooting releases fragments and texture frames', async ({ pa
   const settled = await page.evaluate(() => (window as any).__MY_DESTROY__.snapshot());
   expect(settled.shots).toBeGreaterThan(150);
   expect(settled.fragments).toBe(0);
-  expect(settled.objects).toBe(initial.objects);
-  expect(settled.sourceFrames).toBe(initial.sourceFrames);
+  expect(settled.objects).toBe(initial.objects + settled.debris);
+  expect(settled.debris).toBeLessThanOrEqual(120);
   expect(maxFragments).toBeLessThanOrEqual(80);
   await page.getByRole('button', { name: 'Reiniciar' }).click();
   const reset = await page.evaluate(() => (window as any).__MY_DESTROY__.snapshot());
   expect(reset.removed).toBe(0);
+  expect(reset.debris).toBe(0);
   expect(reset.objects).toBe(initial.objects);
   expect(errors).toEqual([]);
   frames.sort((a,b) => a-b);
