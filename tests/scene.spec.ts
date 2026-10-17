@@ -155,4 +155,36 @@ test('weapon arsenal switches via hotkeys/UI and supports shotgun spread and gre
   await expect(page.locator('.weapon-slot[data-active="true"]')).toContainText('Pistola');
 });
 
+test('polygonal debris fractures with Delaunator and accumulates physically via Rapier2D on floor and platforms', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Reiniciar' })).toBeEnabled();
+  await expect(page.locator('canvas')).toHaveCount(1);
+  await page.locator('canvas').focus();
+
+  // Initial state has 0 debris
+  let state = await snapshot(page);
+  expect(state.debris).toBe(0);
+
+  // Fire at page to cause destruction and triangular fracture
+  await fire(page, 750, 220);
+  await expect.poll(async () => (await snapshot(page)).hits).toBe(1);
+
+  // Debris pieces should have spawned
+  await expect.poll(async () => (await snapshot(page)).debris).toBeGreaterThan(0);
+  const debrisCount = (await snapshot(page)).debris;
+
+  // Wait 1.2 seconds for Rapier2D to simulate dynamic fall and stacking onto catwalk/platforms
+  await page.waitForTimeout(1200);
+
+  // The debris should remain accumulated in place (not deleted after 300ms like simple particles)
+  state = await snapshot(page);
+  expect(state.debris).toBeGreaterThanOrEqual(debrisCount);
+
+  // Reiniciar resets the scene and cleans all debris bodies and textures
+  await page.getByRole('button', { name: 'Reiniciar' }).click();
+  state = await snapshot(page);
+  expect(state.debris).toBe(0);
+});
+
+
 
