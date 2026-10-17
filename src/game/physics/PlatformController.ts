@@ -46,6 +46,10 @@ export class PlatformController {
     this.jumpBufferTimer = PLAYER_PHYSICS.jumpBufferTime;
   }
 
+  setPlatforms(platforms: Platform[]) {
+    this.options.platforms = platforms;
+  }
+
   /** Checks if any sample point across the player's feet width is solid. */
   private checkFootingSolid(platformY: number): boolean {
     const footOffsets = [-6, 0, 6];

@@ -16,6 +16,8 @@ export type SceneControls = {
   preferences(value: Preferences): void;
   focus(): void;
   setWeapon(id: WeaponId): void;
+  loadCustomPage(data: any): Promise<void>;
+  loadDemoPage(): void;
 };
 export type SceneCallbacks = { update(stats: SceneStats): void; toggleMute(): void };
 export const EMPTY_STATS: SceneStats = { shots: 0, hits: 0, percent: 0, paused: false, ready: false, weapon: 'pistol' };

@@ -34,6 +34,8 @@ export function createGame(parent: HTMLElement, prefs: Preferences, callbacks: S
       snapshot: () => scene.snapshot(),
       solid: (x, y) => scene.solid(x, y),
       setWeapon: (w: WeaponId) => scene.setWeapon(w),
+      loadCustomPage: (data: any) => scene.loadCustomPage(data),
+      loadDemoPage: () => scene.loadDemoPage(),
     };
   }
 
@@ -44,6 +46,8 @@ export function createGame(parent: HTMLElement, prefs: Preferences, callbacks: S
       preferences: (p: Preferences) => scene.setPreferences(p),
       focus: () => scene.focus(),
       setWeapon: (w: WeaponId) => scene.setWeapon(w),
+      loadCustomPage: (data: any) => scene.loadCustomPage(data),
+      loadDemoPage: () => scene.loadDemoPage(),
     },
     destroy() {
       if (import.meta.env.DEV) delete window.__MY_DESTROY__;

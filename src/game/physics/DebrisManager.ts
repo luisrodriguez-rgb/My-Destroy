@@ -45,6 +45,15 @@ export interface PlatformSegment {
   active: boolean;
 }
 
+export interface DetachableData {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  tag: string;
+}
+
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
 }
@@ -56,6 +65,7 @@ export class DebrisManager {
   private serial = 0;
   readonly maxDebris = 120;
   private isInitialized = false;
+  private currentPlatforms: Platform[] = getDemoPlatforms();
 
   constructor(private host: DebrisHost) {}
 
@@ -85,14 +95,23 @@ export class DebrisManager {
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(10.0, WORLD.height / 2 + 50), rightWall);
 
     // 3. Segmented platform colliders (so debris can stack and fall when platforms are destroyed)
-    this.buildPlatformColliders();
+    this.buildPlatformColliders(this.currentPlatforms);
 
     this.isInitialized = true;
   }
 
-  private buildPlatformColliders(): void {
+  setPlatforms(platforms: Platform[]): void {
+    this.currentPlatforms = platforms;
     if (!this.world) return;
-    const platforms = getDemoPlatforms();
+    for (const seg of this.platformSegments) {
+      this.world.removeRigidBody(seg.body);
+    }
+    this.platformSegments = [];
+    this.buildPlatformColliders(this.currentPlatforms);
+  }
+
+  private buildPlatformColliders(platforms: Platform[] = this.currentPlatforms): void {
+    if (!this.world) return;
     const segWidth = 24;
     for (const p of platforms) {
       for (let sx = p.x; sx < p.x + p.width; sx += segWidth) {
@@ -115,6 +134,43 @@ export class DebrisManager {
         });
       }
     }
+  }
+
+  spawnDetachable(data: DetachableData, frameKey: string): void {
+    if (!this.world || !this.isInitialized) return;
+
+    if (this.activeDebris.length >= this.maxDebris) {
+      this.removeDebris(0);
+    }
+
+    const cx = data.x + data.width / 2;
+    const cy = data.y + data.height / 2;
+
+    const visual = this.host.createDebrisImage(cx, cy, frameKey, 0.5, 0.5);
+
+    // Dynamic rectangular rigid body in Rapier2D with CCD
+    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(cx, cy)
+      .setCcdEnabled(true);
+    const body = this.world.createRigidBody(bodyDesc);
+
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(data.width / 2, data.height / 2);
+    colliderDesc.setRestitution(0.2);
+    colliderDesc.setFriction(0.75);
+    this.world.createCollider(colliderDesc, body);
+
+    const kickX = (Math.random() - 0.5) * 45;
+    const kickY = 15 + Math.random() * 25;
+    const torque = (Math.random() - 0.5) * 9;
+    body.setLinvel({ x: kickX, y: kickY }, true);
+    body.setAngvel(torque, true);
+
+    this.activeDebris.push({
+      visual,
+      body,
+      frameKey,
+      createdTime: Date.now(),
+    });
   }
 
   get count(): number {
@@ -369,7 +425,7 @@ export class DebrisManager {
         this.world.removeRigidBody(seg.body);
       }
       this.platformSegments = [];
-      this.buildPlatformColliders();
+      this.buildPlatformColliders(this.currentPlatforms);
     }
   }
 

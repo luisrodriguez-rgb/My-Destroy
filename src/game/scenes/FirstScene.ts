@@ -5,7 +5,9 @@ import { COLORS, PAPER, WORLD } from '../tuning';
 import type { Preferences, SceneCallbacks, WeaponId } from '../bridge';
 import { screenToWorld } from '../coordinates';
 import { PlatformController } from '../physics/PlatformController';
-import { getDemoPlatforms } from '../platforms/demoPlatforms';
+import { getDemoPlatforms, type Platform } from '../platforms/demoPlatforms';
+import { drawDemoPage } from '../fixtures/demoPage';
+import type { ScrapedPageResult } from '../../server/scraper';
 import { WEAPONS, WEAPON_ORDER, calculateSpreadAngles } from '../weapons/weapons';
 import type { WeaponConfig } from '../weapons/types';
 import { DebrisManager } from '../physics/DebrisManager';
@@ -15,10 +17,24 @@ type Dust = { x: number; y: number; vx: number; vy: number; life: number; durati
 type ShotTracer = { mx: number; my: number; x: number; y: number; hit: boolean };
 type Grenade = { x: number; y: number; vx: number; vy: number; fuse: number; blastRadius: number; angle: number; spin: number };
 
+export interface ActiveDetachable {
+  id: string;
+  paperX: number;
+  paperY: number;
+  worldX: number;
+  worldY: number;
+  width: number;
+  height: number;
+  tag: string;
+}
+
 export class FirstScene extends Phaser.Scene {
   private surface!: DestructiblePage;
   private controller!: PlatformController;
   private debrisManager!: DebrisManager;
+  private detachables: ActiveDetachable[] = [];
+  private initialDetachables: ActiveDetachable[] = [];
+  private currentPlatforms: Platform[] = getDemoPlatforms();
   private actor!: Phaser.GameObjects.Container;
   private arm!: Phaser.GameObjects.Graphics;
   private feet!: Phaser.GameObjects.Graphics;
@@ -57,7 +73,7 @@ export class FirstScene extends Phaser.Scene {
     this.controller = new PlatformController({
       floorY: WORLD.floor - 4,
       worldBounds: { minX: 48, maxX: 1104 },
-      platforms: getDemoPlatforms(),
+      platforms: this.currentPlatforms,
       isSolid: (x, y) => this.surface.hit(x, y),
     }, 350, WORLD.floor - 4);
     this.buildPlayer();
@@ -109,6 +125,7 @@ export class FirstScene extends Phaser.Scene {
       },
     });
     void this.debrisManager.init();
+    this.initDemoDetachables();
 
     const canvas = this.game.canvas;
     canvas.tabIndex = 0;
@@ -392,6 +409,7 @@ export class FirstScene extends Phaser.Scene {
       if (anyHit) {
         this.hits++;
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+        this.checkDetachables();
       }
       this.lastShot = { time: now, flash: weapon.flash, weapon: 'shotgun', tracers };
       this.audio.shotgun(anyHit);
@@ -410,6 +428,7 @@ export class FirstScene extends Phaser.Scene {
         this.emitImpact(this.aim.x, this.aim.y, baseAngle, weapon.radius, weapon.fragments);
         this.debrisManager?.applyBlastImpulse(this.aim.x, this.aim.y, weapon.radius * 1.3, 160);
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+        this.checkDetachables();
       }
     }
     this.audio.shot(hit);
@@ -469,9 +488,169 @@ export class FirstScene extends Phaser.Scene {
     this.effects?.clear();
   }
 
+  private initDemoDetachables(): void {
+    const demoList: ActiveDetachable[] = [
+      {
+        id: 'demo-button',
+        paperX: 50,
+        paperY: 338,
+        worldX: PAPER.x + 50,
+        worldY: PAPER.y + 338,
+        width: 142,
+        height: 37,
+        tag: 'button',
+      },
+      {
+        id: 'demo-landscape',
+        paperX: 598,
+        paperY: 100,
+        worldX: PAPER.x + 598,
+        worldY: PAPER.y + 100,
+        width: 458,
+        height: 235,
+        tag: 'img',
+      },
+    ];
+    this.initialDetachables = [...demoList];
+    this.detachables = [...demoList];
+  }
+
+  private checkDetachables(): void {
+    if (!this.surface || this.detachables.length === 0) return;
+    for (let i = this.detachables.length - 1; i >= 0; i--) {
+      const d = this.detachables[i];
+      const inset = Math.max(3, Math.min(8, Math.min(d.width, d.height) * 0.15));
+      const corners = [
+        { x: d.worldX + inset, y: d.worldY + inset },
+        { x: d.worldX + d.width - inset, y: d.worldY + inset },
+        { x: d.worldX + inset, y: d.worldY + d.height - inset },
+        { x: d.worldX + d.width - inset, y: d.worldY + d.height - inset },
+      ];
+
+      let solidAnchors = 0;
+      for (const pt of corners) {
+        if (this.surface.hit(pt.x, pt.y)) {
+          solidAnchors++;
+        }
+      }
+
+      // If it loses 2 or more anchors (solidAnchors <= 2), detach!
+      if (solidAnchors <= 2) {
+        this.detachables.splice(i, 1);
+        this.triggerDetach(d);
+      }
+    }
+  }
+
+  private triggerDetach(d: ActiveDetachable): void {
+    const frameKey = `detachable-${d.id}-${this.serial++}`;
+    const tex = this.textures.createCanvas(frameKey, d.width, d.height);
+    if (tex) {
+      const ctx = tex.context;
+      ctx.clearRect(0, 0, d.width, d.height);
+      ctx.drawImage(this.surface.original, d.paperX, d.paperY, d.width, d.height, 0, 0, d.width, d.height);
+      // Subtle charred outline
+      ctx.strokeStyle = '#17110dbb';
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(0, 0, d.width, d.height);
+      tex.refresh();
+    }
+
+    // Erase element from background surface so it doesn't leave a ghost
+    this.surface.clearArea(d.paperX, d.paperY, d.width, d.height);
+
+    // Spawn Rapier2D dynamic rigid body
+    this.debrisManager?.spawnDetachable({
+      id: d.id,
+      x: d.worldX,
+      y: d.worldY,
+      width: d.width,
+      height: d.height,
+      tag: d.tag,
+    }, frameKey);
+
+    this.audio.debrisCrack();
+    this.emitImpact(d.worldX + d.width / 2, d.worldY + d.height / 2, -Math.PI / 2, Math.min(d.width, d.height) * 0.4, 6);
+  }
+
+  async loadCustomPage(data: ScrapedPageResult): Promise<void> {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('Failed to load page screenshot'));
+      img.src = data.screenshot;
+    });
+
+    this.clearEffects();
+    this.audio.stop();
+    this.keys.clear();
+    this.shots = 0;
+    this.hits = 0;
+    this.shotTime = -1000;
+    this.resets++;
+
+    // 1. Surface: draw new image and reset regions
+    this.surface.loadPage(img);
+
+    // 2. Map platforms to world space
+    const worldPlatforms: Platform[] = data.platforms.map(p => ({
+      id: p.id,
+      name: p.name,
+      x: PAPER.x + p.x,
+      y: PAPER.y + p.y,
+      width: p.width,
+      height: p.height,
+      oneWay: true,
+    }));
+    this.currentPlatforms = worldPlatforms;
+    this.controller.setPlatforms(worldPlatforms);
+    this.debrisManager?.setPlatforms(worldPlatforms);
+
+    // 3. Set up active detachables
+    const mappedDetachables: ActiveDetachable[] = data.detachables.map(d => ({
+      id: d.id,
+      paperX: d.x,
+      paperY: d.y,
+      worldX: PAPER.x + d.x,
+      worldY: PAPER.y + d.y,
+      width: d.width,
+      height: d.height,
+      tag: d.tag,
+    }));
+    this.initialDetachables = [...mappedDetachables];
+    this.detachables = [...mappedDetachables];
+
+    // 4. Place player safely on catwalk
+    this.controller.reset(350, WORLD.floor - 4);
+    this.notify();
+  }
+
+  loadDemoPage(): void {
+    this.clearEffects();
+    this.audio.stop();
+    this.keys.clear();
+    this.shots = 0;
+    this.hits = 0;
+    this.shotTime = -1000;
+    this.resets++;
+
+    const demoCanvas = drawDemoPage();
+    this.surface.loadPage(demoCanvas);
+
+    const demoPlatforms = getDemoPlatforms();
+    this.currentPlatforms = demoPlatforms;
+    this.controller.setPlatforms(demoPlatforms);
+    this.debrisManager?.setPlatforms(demoPlatforms);
+
+    this.initDemoDetachables();
+    this.controller.reset(350, WORLD.floor - 4);
+    this.notify();
+  }
+
   resetLevel() {
     this.clearEffects(); this.audio.stop(); this.surface.reset(); this.keys.clear();
     this.shots = 0; this.hits = 0; this.shotTime = -1000;
+    this.detachables = [...this.initialDetachables];
     this.controller.reset(350, WORLD.floor - 4);
     this.phase = 0; this.paused = false; this.resets++; this.notify();
   }
@@ -484,6 +663,8 @@ export class FirstScene extends Phaser.Scene {
       removed: this.surface?.mask.removedCount,
       fragments: this.fragments.length,
       debris: this.debrisManager ? this.debrisManager.count : 0,
+      detachables: this.detachables.length,
+      platforms: this.currentPlatforms.length,
       objects: this.children.length,
       sourceFrames: this.surface?.source.getFrameNames(true).length,
       resets: this.resets,
@@ -602,7 +783,7 @@ export class FirstScene extends Phaser.Scene {
     }
 
     // Update and draw flying grenades
-    const demoPlats = getDemoPlatforms();
+    const plats = this.currentPlatforms;
     for (let i = this.grenades.length - 1; i >= 0; i--) {
       const g = this.grenades[i];
       g.vy += 860 * dt;
@@ -619,7 +800,7 @@ export class FirstScene extends Phaser.Scene {
         if (Math.abs(g.vy) > 35) this.audio.grenadeBounce();
       } else if (g.vy > 0) {
         // Platform collisions
-        for (const p of demoPlats) {
+        for (const p of plats) {
           if (g.x >= p.x - 4 && g.x <= p.x + p.width + 4 && g.y >= p.y - 4 && g.y <= p.y + 10) {
             if (this.surface.hit(g.x, p.y + 2)) {
               g.y = p.y - 2;
@@ -642,6 +823,7 @@ export class FirstScene extends Phaser.Scene {
         // Blast impulse to scatter stacked debris with radial impulse & angular torque
         this.debrisManager?.applyBlastImpulse(g.x, g.y, g.blastRadius, 520);
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+        this.checkDetachables();
         this.audio.explosion();
         if (!this.prefs.reducedMotion) {
           this.cameras.main.shake(120, 0.007);

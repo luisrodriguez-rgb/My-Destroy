@@ -171,6 +171,28 @@ export class ShotAudio {
     } catch { /* Audio support is optional */ }
   }
 
+  debrisCrack() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const noiseBuf = this.getNoiseBuffer(ctx, 0.2);
+      const source = ctx.createBufferSource();
+      source.buffer = noiseBuf;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1200, now);
+      filter.frequency.exponentialRampToValueAtTime(300, now + 0.15);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.28, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+      source.connect(filter).connect(gain).connect(ctx.destination);
+      this.track(source, () => { filter.disconnect(); gain.disconnect(); });
+      source.start(now);
+      source.stop(now + 0.18);
+    } catch { /* Audio support is optional */ }
+  }
+
   private track(source: AudioScheduledSourceNode, cleanup: () => void) {
     this.voices.add(source);
     source.onended = () => { this.voices.delete(source); source.disconnect(); cleanup(); };

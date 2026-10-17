@@ -178,4 +178,31 @@ describe('PlatformController', () => {
     expect(catwalkGround.y).toBe(530);
     expect(catwalkGround.platformId).toBe('catwalk');
   });
+
+  it('updates platform list dynamically via setPlatforms', () => {
+    const controller = new PlatformController({
+      floorY: 530,
+      worldBounds: { minX: 48, maxX: 1104 },
+      platforms: [],
+      isSolid: () => true,
+    }, 200, 250);
+
+    expect(controller.findGroundBelow().platformId).toBe('catwalk');
+
+    controller.setPlatforms([
+      {
+        id: 'new-dynamic-plat',
+        name: 'Dynamic Scraped Platform',
+        x: 150,
+        y: 350,
+        width: 100,
+        height: 12,
+        oneWay: true,
+      },
+    ]);
+
+    const ground = controller.findGroundBelow();
+    expect(ground.y).toBe(350);
+    expect(ground.platformId).toBe('new-dynamic-plat');
+  });
 });

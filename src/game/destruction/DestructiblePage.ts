@@ -74,5 +74,40 @@ export class DestructiblePage {
     texture.refresh();
   }
 
+  loadPage(image: HTMLCanvasElement | HTMLImageElement) {
+    const ctx = this.original.getContext('2d')!;
+    ctx.clearRect(0, 0, PAPER.width, PAPER.height);
+    ctx.drawImage(image, 0, 0, PAPER.width, PAPER.height);
+    this.source.refresh();
+    this.reset();
+  }
+
+  clearArea(x: number, y: number, width: number, height: number): void {
+    const cellSize = this.mask.cellSize;
+    for (let py = y; py < y + height; py += cellSize) {
+      for (let px = x; px < x + width; px += cellSize) {
+        if (this.mask.contains(px, py)) {
+          this.mask.damage(px, py, cellSize, 0);
+        }
+      }
+    }
+
+    const size = this.mask.regionSize;
+    const startX = Math.floor(Math.max(0, x) / size);
+    const endX = Math.floor(Math.min(PAPER.width - 1, x + width) / size);
+    const startY = Math.floor(Math.max(0, y) / size);
+    const endY = Math.floor(Math.min(PAPER.height - 1, y + height) / size);
+    const cols = Math.ceil(PAPER.width / size);
+
+    for (let ry = startY; ry <= endY; ry++) {
+      for (let rx = startX; rx <= endX; rx++) {
+        const idx = ry * cols + rx;
+        if (idx >= 0 && idx < this.regions.length) {
+          this.refresh(idx);
+        }
+      }
+    }
+  }
+
   reset() { this.mask.reset(); this.regions.forEach((_, i) => this.refresh(i)); }
 }
