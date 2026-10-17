@@ -15,11 +15,17 @@ El jugador controla un operario industrial sobre una pasarela suspendida frente 
 
 ## 🎮 Mecánicas de Juego
 
-### 1. Destrucción Granular de Superficies
+### 1. Destrucción Granular de Superficies y Bordes con Dithering
 - **Máscara en CPU (`RegionMask`)**: La página destructible se almacena en memoria dividida en regiones cuadradas de 128 px compuestas por celdas de 2 px.
-- **Transparencia Real**: Los impactos no superponen manchas ni círculos; eliminan físicamente los píxeles de la textura en el canvas WebGL para revelar el fondo real.
-- **Fragmentos y Escombros**: Cada perforación desprende esquirlas de textura proporcionales al material arrancado, sujetas a gravedad, dispersión angular y desvanecimiento.
+- **Bordes Retro con Bayer Dithering (4×4)**: El perímetro de cada cráter no es un corte liso; una corona de dispersión de 4–6 px evalúa una matriz Bayer 4×4 para disolver píxeles de forma escalonada e irregular, emulando la estética de *Destroy Any Website*.
+- **Carbonización y Chispas Incandescentes**: La orilla del papel arrancado se colorea en tiempo real con un reborde de carbón oscuro (`#17110d`), un halo exterior de sombra tostada y motas incandescentes anaranjadas (`#ff6b00`).
+- **Transparencia Real**: Los impactos eliminan físicamente los píxeles de la textura en el canvas WebGL para revelar el fondo industrial real subyacente.
 - **Detección Continua de Vacíos**: Disparar sobre un hueco ya abierto no genera daño redundante ni cuenta como impacto nuevo. El porcentaje de destrucción es estrictamente acumulativo sobre material intacto.
+
+### 2. Fractura Poligonal y Escombros Físicos Apilables (Rapier2D + Delaunator)
+- **Triangulación Delaunay en Tiempo Real**: Cada impacto calcula una red de fractura mediante `delaunator`, dividiendo el área demolida en fragmentos triangulares con texturas extraídas directamente del documento web original.
+- **Física de Cuerpos Rígidos (Rapier2D vía WebAssembly)**: Los fragmentos son administrados por el motor de física `@dimforge/rapier2d-compat` con colisionadores convexos de polígono (`triangle` y `cuboid`).
+- **Montañas de Escombros y Acumulación**: Los trozos de papel y cartón caen con aceleración de gravedad, rebotan elásticamente y colisionan entre sí, acumulándose en pilas persistentes sobre la pasarela y las plataformas. El jugador camina a través de las montañas de desechos generadas por su propia destrucción.
 
 ### 2. Soporte Físico y Plataformas Destructibles
 - **Plataformas de la Página**: 7 elementos geométricos extraídos de la maquetación editorial (titulares, paneles, barra de pie de página) actúan como plataformas elevadas atravesables (*one-way*).
@@ -138,10 +144,10 @@ Evalúan la lógica geométrica, el sistema de armas, la cinemática de platafor
 ```bash
 npm test
 ```
-*Cobertura: 16 pruebas unitarias verificando `RegionMask`, `PlatformController`, `calculateSpreadAngles` y transformaciones de coordenadas.*
+*Cobertura: 21 pruebas unitarias verificando `RegionMask` (con Bayer dithering), `PlatformController`, `DebrisManager` (fractura Delaunay y simulación de cuerpos rígidos con Rapier2D), `calculateSpreadAngles` y transformaciones de coordenadas.*
 
 ### 2. Pruebas End-to-End en Navegador (Playwright)
-Comprueban la interacción real en Google Chrome: disparos con puntero, persistencia de huecos, salto hacia plataformas, colapso por destrucción bajo los pies, cambio de armas, dispersión de escopeta, física de granadas y resistencia contra fugas de memoria:
+Comprueban la interacción real en Google Chrome: disparos con puntero, persistencia de huecos, salto hacia plataformas, colapso por destrucción bajo los pies, cambio de armas, dispersión de escopeta, física de granadas, fractura poligonal con acumulación física de escombros en suelo y plataformas, y resistencia contra fugas de memoria:
 ```bash
 npm run test:browser
 ```

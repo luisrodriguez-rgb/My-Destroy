@@ -20,8 +20,11 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
 │  ├── PlatformController.ts ◄──► RegionMask (CPU Ocupación)  │
 │  │   └── demoPlatforms.ts                                   │
 │  │                                                          │
-│  ├── Surface.ts (Destructible Page WebGL Canvas)            │
-│  │   └── RegionMask.ts (Celdas 2px / Regiones 128px)        │
+│  ├── DebrisManager.ts (Rapier2D WASM + Delaunator)          │
+│  │   └── Fractura triangular y apilamiento de escombros     │
+│  │                                                          │
+│  ├── DestructiblePage.ts (Canvas Textures por regiones)     │
+│  │   └── RegionMask.ts (Bayer 4×4 Dithering + celdas 2px)   │
 │  │                                                          │
 │  ├── Weapons System (weapons.ts)                            │
 │  │   ├── Pistola (Hitscan puntual)                          │
@@ -46,23 +49,29 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
   - `SceneStats`: Emite cambios de estado hacia React (`shots`, `hits`, `percent`, `paused`, `ready`, `weapon`).
 - La instancia de Phaser expone sus métodos de inspección en `window.__MY_DESTROY__` para pruebas de navegador E2E sin ensuciar el código productivo.
 
-### C. Subsistema de Destrucción (`src/game/destruction/`)
+### C. Subsistema de Destrucción y Dithering (`src/game/destruction/`)
 - **`RegionMask.ts`**:
   - Almacena una cuadrícula en CPU de 1152 × 584 px con celdas de 2 px agrupadas en bloques de 128 px.
   - Al recibir un impacto (radio $R$ y coordenadas $X,Y$), evalúa exactamente qué celdas pasan de estado ocupado a vacío.
+  - **Bayer Dithering 4×4**: En la franja exterior del cráter ($R < r \le R + 4\text{px}$), aplica la matriz Bayer 4×4 para disolver celdas con densidad decreciente, produciendo un contorno irregular retro-pixelado.
   - Calcula el porcentaje de daño destruido dividiendo celdas destruidas entre el total de celdas sólidas iniciales.
-  - Expone métodos de consulta instantánea (`isSolid(x, y)`, `sampleSegment(x1, y1, x2, y2)`).
-- **`Surface.ts`**:
-  - Gestiona el renderizado de la página web dañada sobre el canvas de Phaser.
-  - Al recibir modificaciones de la máscara, redibuja únicamente las regiones afectadas con composición `destination-out` para dejar agujeros transparentes nativos en la textura.
-  - Genera y desprende fragmentos de imagen (esquirlas) proporcionales al material eliminado.
+  - Expone métodos de consulta instantánea (`isSolid(x, y)`).
+- **`DestructiblePage.ts`**:
+  - Renderiza la textura de la página por bloques regionales en el canvas de Phaser.
+  - **Carbonización y Chispas Incandescentes**: Dibuja un ribete de carbón oscuro (`#17110dee`), un halo de sombra quemada (`#3c241566`) y partículas incandescentes de brasa (`#ff6b00ee`) sobre las celdas sólidas que bordean un agujero.
 
-### D. Físicas y Plataformas Destructibles (`src/game/physics/`)
+### D. Físicas Rígidas y Fractura Poligonal (`src/game/physics/`)
+- **`DebrisManager.ts`**:
+  - Genera fractura geométrica usando `delaunator` para dividir el área demolida en múltiples triángulos texturizados recortados de la página original.
+  - Simula los escombros mediante el motor de física de cuerpos rígidos `@dimforge/rapier2d-compat` (WASM).
+  - Cada fragmento posee un colisionador de triángulo (`RAPIER.ColliderDesc.triangle`) o cuboid, restituyendo rebotes elásticos y fricción real.
+  - Los trozos colisionan contra el suelo de la pasarela y las 7 plataformas geométricas, **acumulándose en pilas físicas persistentes** a los pies del jugador.
+  - Administra un límite estricto de capacidad (`maxDebris = 120`) con reciclaje automático para garantizar 60 FPS sostenidos.
 - **`PlatformController.ts`**:
   - Implementa un modelo cinemático determinista para el operario (sin depender de simulaciones pesadas de físicas como Arcade o Matter).
   - Consulta las 7 plataformas geométricas definidas en `demoPlatforms.ts` (tarjetas, botones, barras de la página) y el suelo indestructible de la pasarela (`y = 530`).
   - **Detección de soporte destructible**: en cada fotograma, muestrea la solidez de la plataforma en los pies del jugador (`PlatformController.isFootingSolid()`). Si un disparo abre un agujero en ese punto, el soporte se cancela de inmediato y el jugador cae por aceleración de gravedad.
-  - Gestiona salto dinámico, caída voluntaria (*drop*) con <kbd>S</kbd>, *coyote time* (100 ms) y *jump buffer* (120 ms).
+  - Gestiona salto elástico, caída voluntaria (*drop*) con <kbd>S</kbd>, *coyote time* (100 ms) y *jump buffer* (120 ms).
 
 ### E. Sistema de Armas (`src/game/weapons/`)
 - Arquitectura basada en datos:
