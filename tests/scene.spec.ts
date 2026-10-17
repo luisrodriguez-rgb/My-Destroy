@@ -111,3 +111,48 @@ test('player jumps onto destructible platform and falls when destroyed underneat
   expect(landedCatwalk.platform).toBe('catwalk');
 });
 
+test('weapon arsenal switches via hotkeys/UI and supports shotgun spread and grenade physics', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Reiniciar' })).toBeEnabled();
+  await expect(page.locator('canvas')).toHaveCount(1);
+  await page.locator('canvas').focus();
+
+  // Initial weapon is pistol
+  let state = await snapshot(page);
+  expect(state.weapon).toBe('pistol');
+
+  // Switch to shotgun using hotkey '2'
+  await page.keyboard.press('Digit2');
+  state = await snapshot(page);
+  expect(state.weapon).toBe('shotgun');
+  await expect(page.locator('.weapon-slot[data-active="true"]')).toContainText('Escopeta');
+
+  // Fire shotgun at target area
+  await fire(page, 700, 200);
+  await expect.poll(async () => (await snapshot(page)).shots).toBe(1);
+  await expect.poll(async () => (await snapshot(page)).hits).toBeGreaterThanOrEqual(1);
+
+  // Switch to grenade using UI button
+  await page.locator('.weapon-slot', { hasText: 'Granadas' }).click();
+  state = await snapshot(page);
+  expect(state.weapon).toBe('grenade');
+
+  // Fire grenade towards the demo page center
+  const initialRemoved = (await snapshot(page)).removed;
+  await fire(page, 600, 300);
+  await expect.poll(async () => (await snapshot(page)).shots).toBe(2);
+
+  // Grenade has a 1.2s fuse, after detonation it should increase removed pixels with a wide radial crater
+  await page.waitForTimeout(1600);
+  const postBlast = await snapshot(page);
+  expect(postBlast.removed).toBeGreaterThan(initialRemoved);
+
+  // Switch back to pistol using hotkey '1'
+  await page.locator('canvas').focus();
+  await page.keyboard.press('Digit1');
+  state = await snapshot(page);
+  expect(state.weapon).toBe('pistol');
+  await expect(page.locator('.weapon-slot[data-active="true"]')).toContainText('Pistola');
+});
+
+

@@ -7,10 +7,10 @@
     "width": 1440,
     "height": 1100
   },
-  "clicks": 289,
-  "acceptedShots": 289,
+  "clicks": 288,
+  "acceptedShots": 288,
   "hits": 168,
-  "maxSampledFragments": 27,
+  "maxSampledFragments": 26,
   "settledFragments": 0,
   "objectsBefore": 49,
   "objectsAfter": 49,
@@ -19,7 +19,7 @@
   "requestAnimationFrameMs": {
     "p50": 16.69999999999709,
     "p95": 16.700000000004366,
-    "samples": 3601
+    "samples": 3600
   },
   "note": "Headless Chrome observation, not a performance guarantee for other devices or proof of no heap leaks."
 }
