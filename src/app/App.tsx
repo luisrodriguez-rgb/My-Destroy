@@ -31,7 +31,6 @@ function WeaponIcon({ name }: { name: 'pistol' | 'shotgun' | 'grenade' }) {
 }
 
 export function App() {
-
   const host = useRef<HTMLDivElement>(null);
   const controls = useRef<SceneControls | null>(null);
   const [prefs, setPrefs] = useState(readPreferences);
@@ -40,6 +39,11 @@ export function App() {
   const [error, setError] = useState('');
   const [resetMessage, setResetMessage] = useState('');
   const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const [urlInput, setUrlInput] = useState('https://es.wikipedia.org');
+  const [activeUrl, setActiveUrl] = useState('demo');
+  const [isScraping, setIsScraping] = useState(false);
+  const [scrapeError, setScrapeError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -66,6 +70,49 @@ export function App() {
   }
   function resume() { controls.current?.pause(false); controls.current?.focus(); }
 
+  async function loadUrl(targetUrl: string) {
+    const trimmed = targetUrl.trim();
+    if (!trimmed) return;
+    setIsScraping(true);
+    setScrapeError('');
+    try {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: trimmed }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Error al capturar la página' }));
+        throw new Error(err.error || `Error HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      await controls.current?.loadCustomPage(data);
+      setActiveUrl(data.url);
+      setResetMessage(`Página cargada: ${data.title || trimmed}`);
+      clearTimeout(resetTimer.current);
+      resetTimer.current = setTimeout(() => setResetMessage(''), 3000);
+    } catch (err: any) {
+      setScrapeError(err.message || 'Error al capturar URL');
+    } finally {
+      setIsScraping(false);
+    }
+  }
+
+  function handlePreset(url: string) {
+    setUrlInput(url);
+    void loadUrl(url);
+  }
+
+  function handleRestoreDemo() {
+    controls.current?.loadDemoPage();
+    setActiveUrl('demo');
+    setUrlInput('https://es.wikipedia.org');
+    setScrapeError('');
+    setResetMessage('Demo original restaurada.');
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setResetMessage(''), 2400);
+  }
+
   return <main>
     <header className="topbar">
       <a className="brand" href="/" aria-label="My-Destroy, inicio"><span className="brand-mark">✦</span>my-destroy<span className="brand-dot">.</span></a>
@@ -79,8 +126,100 @@ export function App() {
 
     <section className="game-shell" aria-label="Primera escena jugable">
       <div className="browser-bar">
-        <div className="page-address"><span className="window-dots" aria-hidden="true"><i /><i /><i /></span><span>the-everyday-internet<span className="address-suffix">.demo</span></span><span className="fixture-tag">PÁGINA FICTICIA</span></div>
-        <div className="damage-readout"><span>DESTRUCCIÓN</span><strong data-testid="percent">{stats.percent.toFixed(1)}<small>%</small></strong><div className="meter" role="progressbar" aria-label="Área destructible destruida" aria-valuenow={Number(stats.percent.toFixed(1))} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${stats.percent}%` }} /></div></div>
+        <form
+          className="url-form"
+          onSubmit={e => {
+            e.preventDefault();
+            void loadUrl(urlInput);
+          }}
+          aria-label="Cargar URL para destruir"
+        >
+          <span className="window-dots" aria-hidden="true"><i /><i /><i /></span>
+          <div className="url-input-wrap">
+            <span className="protocol-icon" aria-hidden="true">🌐</span>
+            <input
+              type="text"
+              className="url-input"
+              value={urlInput}
+              onChange={e => setUrlInput(e.target.value)}
+              placeholder="https://..."
+              disabled={isScraping}
+              aria-label="Dirección web a demoler"
+            />
+            {activeUrl !== 'demo' && (
+              <button
+                type="button"
+                className="demo-pill"
+                onClick={handleRestoreDemo}
+                title="Volver a la demo editorial"
+              >
+                Volver a demo
+              </button>
+            )}
+          </div>
+
+          <div className="url-presets" role="group" aria-label="Páginas sugeridas">
+            <button
+              type="button"
+              className="preset-chip"
+              onClick={() => handlePreset('https://es.wikipedia.org')}
+              disabled={isScraping}
+              title="Cargar Wikipedia"
+            >
+              Wikipedia
+            </button>
+            <button
+              type="button"
+              className="preset-chip"
+              onClick={() => handlePreset('https://github.com')}
+              disabled={isScraping}
+              title="Cargar GitHub"
+            >
+              GitHub
+            </button>
+          </div>
+
+          <button
+            type="submit"
+            className={`scrape-button ${isScraping ? 'is-loading' : ''}`}
+            disabled={isScraping}
+          >
+            {isScraping ? (
+              <>
+                <span className="spinner" aria-hidden="true" />
+                <span>Capturando…</span>
+              </>
+            ) : (
+              <>
+                <span>Destruir</span>
+                <span aria-hidden="true">⚡</span>
+              </>
+            )}
+          </button>
+
+          {scrapeError && (
+            <span className="scrape-error-badge" role="alert" title={scrapeError}>
+              {scrapeError.length > 28 ? `${scrapeError.slice(0, 28)}…` : scrapeError}
+            </span>
+          )}
+        </form>
+
+        <div className="damage-readout">
+          <span>DESTRUCCIÓN</span>
+          <strong data-testid="percent">
+            {stats.percent.toFixed(1)}<small>%</small>
+          </strong>
+          <div
+            className="meter"
+            role="progressbar"
+            aria-label="Área destructible destruida"
+            aria-valuenow={Number(stats.percent.toFixed(1))}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <span style={{ width: `${stats.percent}%` }} />
+          </div>
+        </div>
       </div>
       <div className={`stage ${stats.paused ? 'is-paused' : ''}`}>
         <div ref={host} className="game-host" data-testid="game-host" />
