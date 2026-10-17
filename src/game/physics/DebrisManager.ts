@@ -65,11 +65,10 @@ export class DebrisManager {
     // Gravity pointing downwards towards catwalk
     this.world = new RAPIER.World({ x: 0.0, y: 880.0 });
 
-    // 1. Catwalk floor collider at y = 530
-    // Thick 100px block positioned under y = 530 to guarantee zero tunneling into HUD
-    const floorY = WORLD.floor; // 530
+    // 1. Catwalk floor collider at y = 524 (6px margin above catwalk line y=530 to guarantee zero protrusion)
+    const floorTop = 524;
     const floorHalfHeight = 50.0;
-    const floorDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(WORLD.width / 2, floorY + floorHalfHeight);
+    const floorDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(WORLD.width / 2, floorTop + floorHalfHeight);
     const floorBody = this.world.createRigidBody(floorDesc);
     const floorCollider = RAPIER.ColliderDesc.cuboid(WORLD.width / 2 + 100, floorHalfHeight);
     floorCollider.setFriction(0.85);
@@ -224,6 +223,17 @@ export class DebrisManager {
       const sy = gy - PAPER.y;
       if (sx < 0 || sx >= PAPER.width || sy < 0 || sy >= PAPER.height) continue;
 
+      // Triangle area via cross product
+      const area2 = Math.abs(
+        p0[0] * (p1[1] - p2[1]) +
+        p1[0] * (p2[1] - p0[1]) +
+        p2[0] * (p0[1] - p1[1])
+      );
+      const area = 0.5 * area2;
+
+      // Discard micro-crumbs (< 45 px^2) to prevent small crumbs lining up on text platforms
+      if (area < 45.0) continue;
+
       const minX = Math.min(p0[0], p1[0], p2[0]);
       const maxX = Math.max(p0[0], p1[0], p2[0]);
       const minY = Math.min(p0[1], p1[1], p2[1]);
@@ -281,8 +291,6 @@ export class DebrisManager {
       const lb = [p1[0] - gx, p1[1] - gy];
       const lc = [p2[0] - gx, p2[1] - gy];
 
-      // Area of triangle (twice the signed area)
-      const area2 = Math.abs(la[0] * (lb[1] - lc[1]) + lb[0] * (lc[1] - la[1]) + lc[0] * (la[1] - lb[1]));
       let colliderDesc: RAPIER.ColliderDesc;
 
       if (area2 > 8.0) {

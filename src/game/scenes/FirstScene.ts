@@ -27,6 +27,7 @@ export class FirstScene extends Phaser.Scene {
   private shadow!: Phaser.GameObjects.Ellipse;
   private audio = new ShotAudio();
   private fragments: Fragment[] = [];
+  private debrisLayer!: Phaser.GameObjects.Container;
   private dust: Dust[] = [];
   private grenades: Grenade[] = [];
   private keys = new Set<string>();
@@ -64,9 +65,16 @@ export class FirstScene extends Phaser.Scene {
     this.reticle = this.add.graphics().setDepth(60);
     this.audio.setMuted(this.prefs.muted);
 
+    this.debrisLayer = this.add.container(0, 0).setDepth(26);
+    const debrisMaskGraphics = this.make.graphics();
+    debrisMaskGraphics.fillStyle(0xffffff).fillRect(0, 0, WORLD.width, 530);
+    this.debrisLayer.setMask(debrisMaskGraphics.createGeometryMask());
+
     this.debrisManager = new DebrisManager({
       createDebrisImage: (x, y, frameKey, originX = 0.5, originY = 0.5) => {
-        return this.add.image(x, y, frameKey).setDepth(26).setOrigin(originX, originY);
+        const img = this.add.image(x, y, frameKey).setOrigin(originX, originY);
+        this.debrisLayer.add(img);
+        return img;
       },
       addDebrisPolygon: (data) => {
         const tex = this.textures.createCanvas(data.frameKey, data.width, data.height);
