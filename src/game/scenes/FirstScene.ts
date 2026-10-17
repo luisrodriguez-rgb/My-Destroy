@@ -65,14 +65,39 @@ export class FirstScene extends Phaser.Scene {
     this.audio.setMuted(this.prefs.muted);
 
     this.debrisManager = new DebrisManager({
-      createDebrisImage: (x, y, frameKey) => {
-        return this.add.image(x, y, 'paper-source', frameKey).setDepth(26).setOrigin(0.5, 0.5);
+      createDebrisImage: (x, y, frameKey, originX = 0.5, originY = 0.5) => {
+        return this.add.image(x, y, frameKey).setDepth(26).setOrigin(originX, originY);
+      },
+      addDebrisPolygon: (data) => {
+        const tex = this.textures.createCanvas(data.frameKey, data.width, data.height);
+        if (tex) {
+          const ctx = tex.context;
+          ctx.clearRect(0, 0, data.width, data.height);
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(data.v0.x, data.v0.y);
+          ctx.lineTo(data.v1.x, data.v1.y);
+          ctx.lineTo(data.v2.x, data.v2.y);
+          ctx.closePath();
+          ctx.clip();
+          ctx.drawImage(this.surface.original, -data.cropX, -data.cropY);
+          // Dark charred carbon edge for torn paper look
+          ctx.strokeStyle = '#17110dbb';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+          ctx.restore();
+          tex.refresh();
+        }
       },
       addDebrisFrame: (frameKey, x, y, w, h) => {
         this.surface.source.add(frameKey, 0, x, y, w, h);
       },
       removeDebrisFrame: (frameKey) => {
-        this.surface.source.remove(frameKey);
+        const tex = this.textures.get(frameKey);
+        if (tex) {
+          tex.destroy();
+        }
+        this.textures.remove(frameKey);
       },
     });
     void this.debrisManager.init();
