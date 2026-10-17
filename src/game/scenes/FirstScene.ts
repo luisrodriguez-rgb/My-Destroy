@@ -311,6 +311,7 @@ export class FirstScene extends Phaser.Scene {
           const result = this.surface.damage(tx, ty, weapon.radius, this.shots * 5.1 + idx);
           if (result.removed.length) {
             this.emitImpact(tx, ty, pAngle, weapon.radius, 4);
+            this.debrisManager?.applyBlastImpulse(tx, ty, weapon.radius * 1.2, 140);
           }
         }
       });
@@ -331,6 +332,8 @@ export class FirstScene extends Phaser.Scene {
       if (result.removed.length) {
         this.hits++;
         this.emitImpact(this.aim.x, this.aim.y, baseAngle, weapon.radius, weapon.fragments);
+        this.debrisManager?.applyBlastImpulse(this.aim.x, this.aim.y, weapon.radius * 1.3, 160);
+        this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
       }
     }
     this.audio.shot(hit);
@@ -560,6 +563,9 @@ export class FirstScene extends Phaser.Scene {
           this.hits++;
           this.emitImpact(g.x, g.y, -Math.PI / 2, g.blastRadius, 24);
         }
+        // Blast impulse to scatter stacked debris with radial impulse & angular torque
+        this.debrisManager?.applyBlastImpulse(g.x, g.y, g.blastRadius, 520);
+        this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
         this.audio.explosion();
         if (!this.prefs.reducedMotion) {
           this.cameras.main.shake(120, 0.007);
