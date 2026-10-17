@@ -1,62 +1,80 @@
-# Organización técnica propuesta
+# Arquitectura Técnica de My-Destroy
 
-> Propuesta inicial conservada. Ya existe una implementación local descrita en `../DESARROLLO.md`. Tras recuperar la dirección original se eligió el impacto puntual sobre el plano de la página para el primer hito. La máscara ya controla superficie, daño y porcentaje; los raycasts físicos y el controlador de plataformas descritos aquí siguen pendientes.
+Este documento describe la arquitectura modular implementada en el proyecto, detallando la interacción entre la interfaz de usuario en **React 19**, el motor de juego en **Phaser 4.2.1**, el subsistema de destrucción por regiones en CPU, el controlador de plataformas cinemáticas y el arsenal de armas con audio procedural.
 
-## Responsabilidades
+---
 
-React gestiona la interfaz, preferencias y montaje del juego. Phaser 4 gestiona escena, entrada de juego, personaje, arma, texturas, efectos y audio. Evitar enviar posiciones y partículas a React en cada fotograma.
+## 1. Diagrama de Alto Nivel
 
-Usar un puente pequeño y tipado: comandos de reinicio/sonido/pausa y eventos de escena preparada/pausada/error. Destruir la instancia de Phaser y desregistrar sus eventos cuando se desmonte el contenedor; comprobar que el montaje de desarrollo no duplica el juego.
-
-Antes de instalar, comprobar versiones compatibles y APIs oficiales de Phaser 4 para texturas, máscaras, renderizado y audio. Fijar las versiones elegidas y generar un lockfile. No sustituir silenciosamente Phaser 4 por otra versión.
-
-## Estructura prevista
-
-```text
-src/
-  app/                       Interfaz React y preferencias
-  game/
-    createGame.ts            Creación y destrucción de Phaser
-    bridge.ts                Comunicación tipada con React
-    scenes/FirstScene.ts     Ciclo de vida y composición
-    entities/Player.ts       Movimiento, orientación y animación
-    weapons/Pistol.ts       Cadencia y resolución del disparo
-    destruction/
-      RegionMask.ts         Ocupación y daño de una región
-      DestructiblePage.ts   Consulta de regiones y renderizado del daño
-    effects/ImpactEffects.ts Fragmentos, polvo y destello
-    audio/ShotAudio.ts       Mezcla, activación y silencio
-    fixtures/demoPage.ts    Contenido y geometría de la página ficticia
-    tuning.ts               Parámetros ajustables
-public/assets/              Recursos incorporados y licencias
-docs/                       Contexto, escena, recuperación y recursos
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    REACT 19 (App.tsx)                       │
+│  - Shell del navegador ficticio  - Toolbar de selección     │
+│  - Métricas de destrucción       - Gestión de preferencias  │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ bridge.ts (SceneControls / SceneStats)
+┌───────────────────────────▼─────────────────────────────────┐
+│                   PHASER 4 (createGame.ts)                  │
+│                                                             │
+│  FirstScene.ts                                              │
+│  ├── PlatformController.ts ◄──► RegionMask (CPU Ocupación)  │
+│  │   └── demoPlatforms.ts                                   │
+│  │                                                          │
+│  ├── Surface.ts (Destructible Page WebGL Canvas)            │
+│  │   └── RegionMask.ts (Celdas 2px / Regiones 128px)        │
+│  │                                                          │
+│  ├── Weapons System (weapons.ts)                            │
+│  │   ├── Pistola (Hitscan puntual)                          │
+│  │   ├── Escopeta (Dispersión angular 5 perdigones)         │
+│  │   └── Granadas (Balística parabólica + rebote + cráter)  │
+│  │                                                          │
+│  └── ShotAudio.ts (Web Audio API procedural sintetizado)     │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Este árbol organiza el trabajo futuro; no representa módulos ya implementados. Crear archivos cuando haya una responsabilidad real que implementar.
+---
 
-## Máscaras por regiones
+## 2. Responsabilidades por Módulo
 
-Dividir la página en regiones acotadas, inicialmente de hasta 128 × 128 píxeles lógicos. Cada región conserva imagen original, ocupación inicial, ocupación actual y estado de actualización pendiente. Un píxel ocupado corresponde a material sólido.
+### A. Capa de Aplicación e Interfaz (`src/app/`)
+- **`App.tsx`**: Renderiza el contenedor del juego (`game-host`), la barra de direcciones simulada, el medidor de destrucción en porcentaje y la barra inferior de selección de arsenal (`arsenal-slots`). Mantiene la persistencia de configuración (`muted`, `reducedMotion`) en `localStorage`.
+- **`styles.css`**: Sistema de diseño con estética industrial oscura, bordes metálicos, fuentes pixeladas y acentos en ámbar (`#FFB454`) y cian (`#79E3D8`).
 
-La ocupación actual es la fuente común para dibujar el daño y resolver colisiones. Una máscara visual por sí sola no modifica la física. Evitar lectura de píxeles desde GPU en cada disparo: mantener la ocupación en CPU y subir únicamente regiones modificadas.
+### B. Puente Tipado (`src/game/bridge.ts`)
+- Desacopla la lógica de React y Phaser mediante dos interfaces estrictas:
+  - `SceneControls`: Permite a React solicitar acciones (`reset`, `pause`, `preferences`, `setWeapon`, `focus`).
+  - `SceneStats`: Emite cambios de estado hacia React (`shots`, `hits`, `percent`, `paused`, `ready`, `weapon`).
+- La instancia de Phaser expone sus métodos de inspección en `window.__MY_DESTROY__` para pruebas de navegador E2E sin ensuciar el código productivo.
 
-Para un disparo, localizar regiones cruzadas por el rayo y recorrer sus celdas en orden hasta el primer sólido. El daño circular afecta todas las regiones que intersecta, incluso cuando el centro queda en una sola. Los impactos sucesivos no pueden restaurar material.
+### C. Subsistema de Destrucción (`src/game/destruction/`)
+- **`RegionMask.ts`**:
+  - Almacena una cuadrícula en CPU de 1152 × 584 px con celdas de 2 px agrupadas en bloques de 128 px.
+  - Al recibir un impacto (radio $R$ y coordenadas $X,Y$), evalúa exactamente qué celdas pasan de estado ocupado a vacío.
+  - Calcula el porcentaje de daño destruido dividiendo celdas destruidas entre el total de celdas sólidas iniciales.
+  - Expone métodos de consulta instantánea (`isSolid(x, y)`, `sampleSegment(x1, y1, x2, y2)`).
+- **`Surface.ts`**:
+  - Gestiona el renderizado de la página web dañada sobre el canvas de Phaser.
+  - Al recibir modificaciones de la máscara, redibuja únicamente las regiones afectadas con composición `destination-out` para dejar agujeros transparentes nativos en la textura.
+  - Genera y desprende fragmentos de imagen (esquirlas) proporcionales al material eliminado.
 
-El suelo industrial es estático e indestructible. Las consultas de movimiento del personaje contra la página usan la misma ocupación, con paso de simulación acotado y barrido suficiente para evitar atravesar obstáculos. No generar un cuerpo físico por píxel. Fragmentos decorativos no participan en las colisiones de la página.
+### D. Físicas y Plataformas Destructibles (`src/game/physics/`)
+- **`PlatformController.ts`**:
+  - Implementa un modelo cinemático determinista para el operario (sin depender de simulaciones pesadas de físicas como Arcade o Matter).
+  - Consulta las 7 plataformas geométricas definidas en `demoPlatforms.ts` (tarjetas, botones, barras de la página) y el suelo indestructible de la pasarela (`y = 530`).
+  - **Detección de soporte destructible**: en cada fotograma, muestrea la solidez de la plataforma en los pies del jugador (`PlatformController.isFootingSolid()`). Si un disparo abre un agujero en ese punto, el soporte se cancela de inmediato y el jugador cae por aceleración de gravedad.
+  - Gestiona salto dinámico, caída voluntaria (*drop*) con <kbd>S</kbd>, *coyote time* (100 ms) y *jump buffer* (120 ms).
 
-Reinicio: copiar las máscaras iniciales, restaurar texturas y vaciar efectos y tareas pendientes. Los datos originales de la página deben ser inmutables.
+### E. Sistema de Armas (`src/game/weapons/`)
+- Arquitectura basada en datos:
+  - `WeaponConfig`: define nombre, categoría, cadencia (*cooldown*), destello, retroceso, radio de daño y comportamiento de proyectiles.
+  - **Pistola**: impacto directo puntual de 28 px.
+  - **Escopeta**: calcula abanico simétrico (`calculateSpreadAngles()`) y dispara 5 perdigones simultáneos con desvío aleatorio menor y perforaciones de 16 px.
+  - **Lanzagranadas**: proyectiles con velocidad vectorial, gravedad y colisión elástica (rebotando contra plataformas y suelo con coeficiente de restitución), que al detonar por tiempo o impacto en vacío ejecutan un cráter de 54 px con sacudida de pantalla.
 
-## Secuencia de construcción
-
-1. Base React + TypeScript + Vite + Phaser 4 y comprobación de montaje, escalado y desmontaje.
-2. Composición industrial, página ficticia y personaje; revisar una captura antes de añadir complejidad.
-3. Puntería, pistola y primer impacto con máscaras compartidas para daño y colisión.
-4. Afinar destello, retroceso, fragmentos y sonido con parámetros centralizados.
-5. Reinicio completo, foco, silencio y movimiento reducido.
-6. Verificar los criterios de `PRIMERA-ESCENA.md` y registrar evidencia.
-
-Pruebas automatizadas útiles al implementar: conversión de coordenadas, primer sólido del rayo, daño entre regiones, paso por huecos y restauración exacta de máscaras. Verificar sensación y composición manualmente; un test unitario no acredita el acabado visual.
-
-## Etapa posterior
-
-Node y Playwright capturarán URLs y producirán imagen y datos de escenario. Definir ese contrato cuando funcione la escena ficticia. La captura web no debe convertirse en requisito de la primera entrega.
+### F. Síntesis Sonora Procedural (`src/game/audio/ShotAudio.ts`)
+- Utiliza la Web Audio API estándar del navegador para sintetizar sonido dinámico sin dependencias de red ni ficheros de audio estáticos.
+- Genera osciladores con curvas exponenciales de frecuencia y envolventes de ganancia para simular:
+  - Disparo de pistola.
+  - Descarga percutora de escopeta.
+  - Lanzamiento de granada y su rebote elástico.
+  - Retumbe de baja frecuencia con filtro paso-bajo en la detonación.

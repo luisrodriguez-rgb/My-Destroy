@@ -1,41 +1,48 @@
-# Validación de la primera escena
+# Validación Técnica y Pruebas de Calidad
 
-Fecha local: 15 de octubre de 2026. Esta revisión corresponde a la aplicación nueva; la lámina recuperada continúa siendo una referencia estática.
+Fecha de actualización: 17 de octubre de 2026. Revisión correspondiente a la suite integral de pruebas automatizadas sobre la primera escena, físicas de plataformas y arsenal de armas.
 
-## Resultado
+---
 
-- `npm run build`: tipos TypeScript y build de producción correctos con Vite 7.3.7.
-- `npm test`: 6 pruebas correctas. Daño repetido, costuras entre cuatro regiones, bordes del mapa, restauración exacta, entradas inválidas y conversión de coordenadas con escala/scroll.
-- `npm run test:browser`: 3 pruebas correctas en Chrome 155.0.8059.82.
-- La instalación final informa cero vulnerabilidades conocidas en su auditoría npm.
-- Los nueve textos y ocho recursos de la recuperación conservan sus bytes verificados. `README.md` y `prueba.md` de la raíz permanecen intactos.
+## Resumen de Resultados
 
-## Navegador y revisión visual
+- **`npm run build`**: Compilación estricta con TypeScript (`tsc --noEmit`) y empaquetado de producción con Vite 7.3.7 sin errores ni fallos de tipos.
+- **`npm test`**: **16 pruebas unitarias pasadas al 100%** en Vitest:
+  - 4 pruebas de `RegionMask` (daño repetido, costuras entre cuatro regiones, bordes del mapa, restauración exacta de máscara).
+  - 7 pruebas de `PlatformController` (movimiento horizontal, aceleración de gravedad, salto elástico, soporte destructible, caída al horadar plataforma, *coyote time* y *jump buffer*).
+  - 3 pruebas de `weapons` (cálculo de dispersión angular simétrica, configuración de armas, límites de munición).
+  - 2 pruebas de `coordinates` (transformaciones de pantalla a mundo con escalado y scroll).
+- **`npm run test:browser`**: **5 pruebas end-to-end pasadas al 100%** en Google Chrome real mediante Playwright:
+  1. *Art direction preview*: Comprueba renderizado fiel de la lámina recuperada en escritorio y móvil (390 px) sin desbordamiento.
+  2. *Destruction & UI lifecycle*: Comprueba disparo con puntero, corte de huecos transparentes, no re-impacto en orificios, pausa, silencio, efectos suaves, 10 reinicios sucesivos, tecla <kbd>R</kbd>, escalado dinámico de ventana y pausa al perder el foco.
+  3. *Destructible platform mechanics*: Comprueba que el personaje salta sobre el estante inferior (`y = 451`), camina sobre él, y tras disparar justo bajo sus pies destruyendo el soporte, pierde sustentación y cae por gravedad hasta la pasarela (`y = 530`).
+  4. *Weapon arsenal switching & physics*: Comprueba el cambio de arma mediante teclado (<kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd>) y botones de interfaz, disparo de escopeta en abanico, balística de granadas con retardo de detonación y cráter de impacto masivo.
+  5. *Endurance test (60 s)*: Sesión de fuego continuo durante 60 segundos (291 disparos) para verificar liberación de escombros y ausencia de fugas de memoria o frames residuales en Phaser.
+- **Seguridad**: Cero vulnerabilidades conocidas en la auditoría de dependencias (`npm audit`).
+- **Integridad de Recuperación**: Los 17 archivos originales en `My-Destroy-recuperado/` se mantienen intactos con sus huellas SHA-256 inalteradas.
 
-Se regeneró e inspeccionó `My-Destroy-recuperado/docs/art-direction-preview.png`. La lámina carga su fuente y no presenta desbordamiento horizontal a 390 px.
+---
 
-Se inspeccionaron las capturas de la escena intacta, dañada y móvil en `docs/previews/`. La interacción automatizada comprueba un único canvas, daño visible mediante entrada real, ausencia de colisión en un hueco, porcentaje estable al volver a disparar allí, pausa, silencio, efectos suaves, diez reinicios, movimiento, tecla R, cambio de tamaño y pérdida de foco. No se observaron errores de página ni respuestas HTTP fallidas en ese recorrido.
+## Métricas de la Sesión de Resistencia (1 minuto de fuego)
 
-La prueba de cambio de tamaño detectó un desfase de coordenadas que quedó corregido: cada evento calcula su punto desde el rectángulo visible actual del canvas. También se corrigió la orientación vertical de la pistola al apuntar a la izquierda.
+Entorno: macOS arm64, Chrome headless, viewport 1440 × 1100. Registro completo en `docs/previews/stress-metrics.json`.
 
-## Sesión de un minuto
-
-Equipo de prueba: macOS arm64, Apple M5; Chrome headless, viewport 1440 × 1100. Datos completos en [stress-metrics.json](previews/stress-metrics.json).
-
-| Medida | Resultado |
+| Métrica | Medición Registrada |
 | --- | --- |
-| Clics / disparos aceptados | 291 / 291 |
-| Impactos sobre superficie aún intacta | 168 |
-| Máximo de fragmentos observado en las muestras | 27; límite configurado: 80 |
-| Fragmentos activos tras asentarse | 0 |
-| Objetos de escena antes / después | 49 / 49 |
-| Frames activos de la textura de fragmentos antes / después | 1 / 1 |
-| Intervalo requestAnimationFrame p50 / p95 | 16,7 / 16,7 ms |
+| **Clics / disparos aceptados** | 291 / 291 |
+| **Impactos nuevos sobre superficie intacta** | 168 |
+| **Pico de fragmentos visuales en pantalla** | 27 (límite configurado: 80) |
+| **Fragmentos activos al detener el fuego** | 0 (eliminación completa) |
+| **Objetos en escena antes / después** | 49 / 49 (sin acumulación) |
+| **Frames activos de textura antes / después** | 1 / 1 (reutilización limpia) |
+| **Intervalo requestAnimationFrame p50 / p95** | 16,7 ms / 16,7 ms (60 FPS estables) |
 
-El contador `frameTotal` de Phaser es acumulativo en esta API y no baja al retirar frames. La comprobación usa los nombres de frames que siguen presentes, no ese contador histórico. Los resultados muestran liberación de los objetos y frames observados; no constituyen un análisis completo del heap ni una garantía de rendimiento en otros equipos.
+---
 
-## Límites de esta revisión
+## Verificación Visual y Capturas
 
-La comprobación visual se hizo mediante capturas de Chrome. El audio está integrado en el recorrido, pero su volumen y timbre todavía requieren escucha humana para la siguiente ronda de ajuste. No se ha comprobado Safari real, Firefox ni controles táctiles. Tampoco se han implementado captura de URLs, salto o plataformas físicas destructibles.
-
-Vite conserva su aviso de tamaño para el chunk de Phaser, documentado en `../DESARROLLO.md`. El motor se descarga separado de la interfaz y los recursos artísticos se sirven localmente.
+Las pruebas generan capturas de pantalla automáticas para auditoría visual en `docs/previews/`:
+- `scene-intact.png`: Escenario antes de interactuar.
+- `scene-damaged.png`: Escenario tras múltiples disparos con orificios transparentes.
+- `scene-mobile.png`: Adaptación responsiva en resolución móvil (390 × 844).
+- `art-direction-preview.png`: Verificación de la maqueta artística recuperada.

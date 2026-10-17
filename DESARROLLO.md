@@ -1,66 +1,97 @@
-# My-Destroy — primera escena jugable
+# My-Destroy — Guía de Desarrollo y Ejecución
 
-Aplicación local de React + TypeScript + Vite + Phaser **4.2.1**. La recuperación original permanece separada en `My-Destroy-recuperado/`. El `README.md` y `prueba.md` que ya existían no se modificaron.
+Aplicación local desarrollada con **React 19**, **TypeScript**, **Vite** y **Phaser 4.2.1**. La carpeta `My-Destroy-recuperado/` se preserva intacta con sus 17 archivos de referencia.
 
-## Arranque
+---
 
-Se ha utilizado Node 24.15.0 y npm 11.12.1.
+## Arranque Rápido
+
+Entorno de ejecución probado: **Node 24.15.0** y **npm 11.12.1** (compatible con Node >= 20).
 
 ```bash
+# Instalar dependencias exactas
 npm ci
+
+# Iniciar servidor local de desarrollo
 npm run dev
 ```
 
-Abrir <http://127.0.0.1:5173/>. No necesita cuenta, claves ni backend. Tras instalar dependencias, la escena y todos sus recursos funcionan sin Internet. El comando de desarrollo genera una copia de la maqueta en `public/reference/` y sirve la dirección visual original desde el enlace del pie de página.
+Abrir <http://127.0.0.1:5173/> en el navegador. La aplicación es totalmente autónoma: no necesita conexión a Internet, claves de API ni base de datos. El script de desarrollo copia los recursos de referencia en `public/reference/` y sirve la maqueta original desde el enlace del pie de página.
 
-## Controles
+---
+
+## Controles del Juego
 
 | Acción | Control |
 | --- | --- |
-| Apuntar | Ratón |
-| Disparar | Clic izquierdo, un tiro por pulsación |
-| Caminar por la pasarela | A/D o flechas, con el juego enfocado |
-| Reiniciar | R o botón Reiniciar |
-| Silenciar | M o botón de sonido |
-| Pausa | Escape o botón de pausa |
-| Reducir efectos | Efectos suaves |
+| **Apuntar** | Ratón (retícula dinámica orientable) |
+| **Disparar** | Clic izquierdo (un disparo por pulsación) |
+| **Moverse** | <kbd>A</kbd> / <kbd>D</kbd> o Flechas Izquierda / Derecha |
+| **Saltar** | <kbd>W</kbd>, <kbd>Espacio</kbd> o Flecha Arriba |
+| **Descender de plataforma** | <kbd>S</kbd> o Flecha Abajo |
+| **Cambiar de arma** | <kbd>1</kbd> Pistola, <kbd>2</kbd> Escopeta, <kbd>3</kbd> Granadas, rueda del ratón o toolbar |
+| **Reiniciar escenario** | <kbd>R</kbd> o botón *Reiniciar* |
+| **Silenciar sonido** | <kbd>M</kbd> o botón de volumen |
+| **Pausa** | <kbd>Escape</kbd> o botón de pausa |
+| **Reducir efectos** | Botón *Efectos suaves* |
 
-Hacer clic en el escenario le da el foco de teclado. Perder el foco de la ventana pausa el juego y limpia las teclas retenidas. El sonido se inicia únicamente después de un disparo. Las preferencias de sonido y efectos se conservan localmente.
+> **Comportamiento del foco:** Hacer clic en el escenario otorga el foco de teclado al juego. Si la ventana pierde el foco, el juego se pausa automáticamente y libera cualquier tecla retenida para evitar derivas de movimiento. El contexto de audio se activa tras la primera interacción de disparo.
 
-## Implementado
+---
 
-- Página editorial ficticia y paisaje propios, siguiendo la maqueta recuperada.
-- Fondo industrial con estructuras, tuberías, máquinas y piezas del atlas CC0 de Kenney.
-- Personaje ámbar con visor cian, arma orientable y movimiento horizontal.
-- Pistola con cadencia de 180 ms, destello de 45 ms, retroceso de 110 ms, sonido sintetizado y partículas acotadas.
-- Máscara en CPU con celdas de 2 px y regiones de 128 px. Los huecos son transparentes y revelan el escenario real detrás; no son círculos pintados encima.
-- Borde irregular y sombreado, fragmentos recortados de la imagen de la página y limpieza de sus frames al desaparecer.
-- Colisión del disparo con la superficie usando esa misma máscara. Un clic sobre un hueco no registra otro impacto ni suma daño.
-- Porcentaje basado únicamente en área nueva destruida, pausa, silencio, efectos suaves y restauración completa.
-- Interfaz adaptable y aviso de que esta primera entrega está orientada a ratón y teclado.
+## Subsistemas Implementados
 
-La pistola apunta al plano de la página: el destino del disparo es la retícula. No se afirma que haya raycast físico a través de plataformas, salto, soporte destructible, captura de URLs, otras armas o poderes. El personaje camina sobre una pasarela indestructible. Son ampliaciones posteriores, conforme al hito pequeño de la dirección recuperada.
+1. **Destrucción Granular por Máscara en CPU (`RegionMask`)**:
+   - Cuadrícula de regiones cuadradas de 128 px con celdas de 2 px.
+   - Texturas WebGL perforadas dinámicamente: los huecos son transparentes y revelan el fondo industrial, sin círculos superpuestos.
+   - Desprendimiento de fragmentos con física, rotación angular y desvanecimiento.
+   - Medición estricta de porcentaje de destrucción sobre píxeles nuevos.
 
-## Comprobación
+2. **Física Cinemática y Plataformas Destructibles (`PlatformController`)**:
+   - 7 plataformas geométricas semi-sólidas (*one-way*) mapeadas a elementos de la página.
+   - Consulta de sustentación en tiempo real contra la máscara en CPU. Si un tiro rompe el soporte donde pisa el operario, este cae por gravedad.
+   - Amortiguación elástica de salto, *coyote time* (100 ms) y *jump buffer* (120 ms).
+   - Proyección dinámica de sombra sobre la superficie más cercana.
+
+3. **Arsenal y Balística (`weapons.ts`, `FirstScene.ts`)**:
+   - **Pistola**: Munición rápida, orificios limpios de 28 px y retroceso visual.
+   - **Escopeta**: Cono de 18° con 5 perdigones independientes de 16 px y expulsión múltiple de escombros.
+   - **Lanzagranadas**: Proyectil parabólico con gravedad y rebote sobre pasarela y plataformas, detonación con espoleta de 1.2 s, sacudida de pantalla (*screen shake*) y cráter de demolición de 54 px.
+
+4. **Síntesis Sonora (`ShotAudio.ts`)**:
+   - Audio procedural con Web Audio API: 5 voces sintetizadas (disparo de pistola, descarga de escopeta, propulsión de granada, rebote metálico y estruendo de detonación).
+
+5. **Ajustes y Accesibilidad**:
+   - Modo de efectos suaves (reduce el número de partículas y desactiva la sacudida de pantalla).
+   - Silenciado global con persistencia en `localStorage`.
+
+---
+
+## Verificación y Calidad
 
 ```bash
+# Pruebas unitarias de física, máscara, armas y coordenadas
 npm test
+
+# Compilación de producción estricta con TypeScript
 npm run build
+
+# Pruebas E2E en navegador real (Google Chrome)
 npm run test:browser
 ```
 
-Las pruebas de navegador utilizan Google Chrome instalado (`channel: chrome`), inician Vite si no está sirviendo y generan capturas en `docs/previews/`. También regeneran `My-Destroy-recuperado/docs/art-direction-preview.png` sin modificar los 17 originales. Si Chrome no está instalado, instalarlo o ajustar explícitamente el canal del proyecto antes de ejecutar esas pruebas.
+- `npm run build` genera los bundles optimizados en `dist/`. Phaser se empaqueta en un chunk separado.
+- `npm run preview` sirve la versión de producción en <http://127.0.0.1:4173/>.
+- `npm run test:browser` valida en un Chrome real el renderizado, el salto hacia plataformas, la destrucción bajo los pies, el cambio de arsenal, la detonación de granadas y la ausencia de fugas de texturas tras 60 s de disparo continuo.
 
-`npm run build` produce `dist/`; `npm run preview` sirve esa compilación en <http://127.0.0.1:4173/>. Phaser se carga en un chunk separado cuando se prepara la escena. Vite advierte sobre su tamaño: el motor ocupa aproximadamente 1,39 MB sin comprimir y 372 KB gzip en esta compilación. No se ha ocultado el aviso ni se ha retirado funcionalidad del motor sin medirla.
+---
 
-## Dónde continuar
+## Localización del Código Clave
 
-- `src/game/tuning.ts`: medidas y tiempos de la pistola.
-- `src/game/destruction/`: máscara, colisiones de superficie y texturas regionales.
-- `src/game/scenes/FirstScene.ts`: mundo, personaje, disparo y efectos.
-- `src/game/audio/ShotAudio.ts`: síntesis y ciclo de vida del audio.
-- `src/app/`: interfaz, preferencias y montaje/desmontaje de Phaser.
-- `docs/RECUPERACION.md`: corrección del paquete y verificación de identidad.
-- `My-Destroy-recuperado/DIRECCION-ARTISTICA.md`: dirección visual original.
-
-Los atlas y fuentes conservan sus avisos en `public/assets/`; el manifiesto completo de procedencia sigue en la carpeta recuperada. El código del proyecto todavía no tiene una licencia general elegida.
+- `src/game/tuning.ts`: Constantes físicas, gravedad, cadencias y dimensiones.
+- `src/game/weapons/`: Tipos de armas, configuraciones y cálculo de dispersión angular.
+- `src/game/physics/`: Controlador cinemático del personaje y consulta de máscara.
+- `src/game/destruction/`: Lógica de regiones, perforación y texturas WebGL.
+- `src/game/scenes/FirstScene.ts`: Ciclo de vida de Phaser, proyectiles, granadas y render.
+- `src/game/audio/ShotAudio.ts`: Nodos y osciladores de audio procedural.
+- `src/app/`: Interfaz en React 19, barra de estado y panel de arsenal.
