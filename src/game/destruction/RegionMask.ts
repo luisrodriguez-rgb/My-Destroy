@@ -1,3 +1,10 @@
+export const BAYER_4X4: readonly (readonly number[])[] = [
+  [ 0,  8,  2, 10],
+  [12,  4, 14,  6],
+  [ 3, 11,  1,  9],
+  [15,  7, 13,  5],
+];
+
 export type Cell = { x: number; y: number };
 export type DamageResult = { removed: Cell[]; dirty: Set<number> };
 
@@ -26,10 +33,10 @@ export class RegionMask {
   regionAt(x: number, y: number) { return Math.floor(y / this.regionSize) * this.regionColumns + Math.floor(x / this.regionSize); }
   get percent() { return this.removedCount / this.cells.length * 100; }
 
-  damage(x: number, y: number, radius: number, seed: number): DamageResult {
+  damage(x: number, y: number, radius: number, seed: number, ditherWidth = 4): DamageResult {
     const result: DamageResult = { removed: [], dirty: new Set() };
     if (![x, y, radius, seed].every(Number.isFinite) || radius <= 0) return result;
-    const extent = radius * 1.16;
+    const extent = (radius + Math.max(0, ditherWidth)) * 1.18;
     const minX = Math.max(0, Math.floor((x - extent) / this.cellSize));
     const maxX = Math.min(this.columns - 1, Math.floor((x + extent) / this.cellSize));
     const minY = Math.max(0, Math.floor((y - extent) / this.cellSize));
@@ -39,14 +46,28 @@ export class RegionMask {
       const dy = (cy + 0.5) * this.cellSize - y;
       const angle = Math.atan2(dy, dx);
       const edge = radius * (1 + 0.09 * Math.sin(angle * 7 + seed) + 0.06 * Math.cos(angle * 11 - seed));
+      const distSq = dx * dx + dy * dy;
+      const edgeSq = edge * edge;
+      let clear = false;
+      if (distSq <= edgeSq) {
+        clear = true;
+      } else if (ditherWidth > 0) {
+        const outerEdge = edge + ditherWidth;
+        if (distSq <= outerEdge * outerEdge) {
+          const dist = Math.sqrt(distSq);
+          const t = (dist - edge) / ditherWidth;
+          const bayer = BAYER_4X4[cy & 3][cx & 3] / 16;
+          if (1.0 - t > bayer) clear = true;
+        }
+      }
       const index = cy * this.columns + cx;
-      if (dx * dx + dy * dy > edge * edge || !this.cells[index]) continue;
+      if (!clear || !this.cells[index]) continue;
       this.cells[index] = 0;
       this.removedCount++;
       const px = cx * this.cellSize, py = cy * this.cellSize;
       result.removed.push({ x: px, y: py });
       // Adjacent regions can acquire a scorched edge even when only this cell is removed.
-      for (const [ox, oy] of [[0, 0], [-2, 0], [2, 0], [0, -2], [0, 2]]) {
+      for (const [ox, oy] of [[0, 0], [-4, 0], [4, 0], [0, -4], [0, 4]]) {
         if (this.contains(px + ox, py + oy)) result.dirty.add(this.regionAt(px + ox, py + oy));
       }
     }

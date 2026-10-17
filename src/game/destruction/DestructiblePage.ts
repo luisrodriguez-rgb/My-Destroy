@@ -34,11 +34,41 @@ export class DestructiblePage {
     ctx.clearRect(0, 0, texture.width, texture.height);
     ctx.drawImage(this.original, -x, -y);
     const step = this.mask.cellSize;
-    ctx.fillStyle = '#51433088';
-    for (let py = y; py < y + texture.height; py += step) for (let px = x; px < x + texture.width; px += step) {
-      if (!this.mask.solid(px, py)) ctx.clearRect(px - x, py - y, step, step);
-      else if ([[px-step, py], [px+step, py], [px, py-step], [px, py+step]].some(([nx, ny]) => this.mask.contains(nx, ny) && !this.mask.solid(nx, ny))) {
-        ctx.fillRect(px - x, py - y, step, step);
+    const step2 = step * 2;
+    for (let py = y; py < y + texture.height; py += step) {
+      for (let px = x; px < x + texture.width; px += step) {
+        if (!this.mask.solid(px, py)) {
+          ctx.clearRect(px - x, py - y, step, step);
+        } else {
+          // Direct border: intense dark carbon charring
+          const hasEmptyDirect = (
+            (!this.mask.contains(px - step, py) || !this.mask.solid(px - step, py)) ||
+            (!this.mask.contains(px + step, py) || !this.mask.solid(px + step, py)) ||
+            (!this.mask.contains(px, py - step) || !this.mask.solid(px, py - step)) ||
+            (!this.mask.contains(px, py + step) || !this.mask.solid(px, py + step))
+          );
+          if (hasEmptyDirect) {
+            ctx.fillStyle = '#17110dee';
+            ctx.fillRect(px - x, py - y, step, step);
+            // Incandescent hot ember micro-speck (deterministic from position hash)
+            if (((px * 19 + py * 31) & 15) === 0) {
+              ctx.fillStyle = '#ff6b00ee';
+              ctx.fillRect(px - x, py - y, step, step);
+            }
+          } else {
+            // Secondary halo: burnt umber dither
+            const hasEmptyNear = (
+              (!this.mask.contains(px - step2, py) || !this.mask.solid(px - step2, py)) ||
+              (!this.mask.contains(px + step2, py) || !this.mask.solid(px + step2, py)) ||
+              (!this.mask.contains(px, py - step2) || !this.mask.solid(px, py - step2)) ||
+              (!this.mask.contains(px, py + step2) || !this.mask.solid(px, py + step2))
+            );
+            if (hasEmptyNear && ((px + py) & 2) === 0) {
+              ctx.fillStyle = '#3c241566';
+              ctx.fillRect(px - x, py - y, step, step);
+            }
+          }
+        }
       }
     }
     texture.refresh();
