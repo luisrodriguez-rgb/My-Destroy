@@ -20,7 +20,18 @@ function Icon({ name }: { name: 'sound' | 'muted' | 'reset' | 'pause' | 'play' |
   return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="square" strokeLinejoin="miter">{paths[name]}</svg>;
 }
 
+function WeaponIcon({ name }: { name: 'pistol' | 'shotgun' | 'grenade' }) {
+  if (name === 'pistol') {
+    return <svg viewBox="0 0 48 28" aria-hidden="true"><path fill="currentColor" d="M6 6h30v3h7v7H21v3h-3v8H8v-7H5V9h1z" /><path fill="#79e3d8" d="M13 9h20v3H13z" /><path fill="#0b1018" d="M12 19h4v5h-4z" /></svg>;
+  }
+  if (name === 'shotgun') {
+    return <svg viewBox="0 0 48 28" aria-hidden="true"><path fill="currentColor" d="M2 10h35V7h8v10H18v4h-3v5H6v-9H2z" /><path fill="#79e3d8" d="M21 10h20v3H21z" /></svg>;
+  }
+  return <svg viewBox="0 0 48 28" aria-hidden="true"><path fill="currentColor" d="M20 3h11v3H20zM17 8h17v4h4v10h-4v4H17v-4h-4V12h4z" /><path fill="#79e3d8" d="M18 14h4v8h-4z" /></svg>;
+}
+
 export function App() {
+
   const host = useRef<HTMLDivElement>(null);
   const controls = useRef<SceneControls | null>(null);
   const [prefs, setPrefs] = useState(readPreferences);
@@ -80,9 +91,55 @@ export function App() {
       </div>
 
       <div className="control-deck">
-        <div className="weapon"><span className="weapon-key">01</span><svg className="pistol-icon" viewBox="0 0 48 32" aria-hidden="true"><path fill="currentColor" d="M5 5h32v3h7v10H23v3h-4v10H9V20H5z" /><path fill="#79e3d8" d="M14 9h22v3H14z" /><path fill="#101923" d="M12 21h4v6h-4z" /></svg><div><strong>Pistola</strong><span>SEMIAUTOMÁTICA</span></div><span className="infinite" title="Munición infinita">∞</span></div>
-        <div className="shortcuts"><span><kbd>A</kbd><kbd>D</kbd> Mover</span><span><kbd>W</kbd> Saltar</span><span><kbd>S</kbd> Bajar</span><span><Icon name="cross" /> Disparar</span></div>
-        <div className="game-actions"><button className="icon-button" onClick={() => controls.current?.pause(!stats.paused)} disabled={!stats.ready} aria-label={stats.paused ? 'Continuar' : 'Pausar'} title="Pausa · Escape"><Icon name={stats.paused ? 'play' : 'pause'} /></button><button className="reset-button" onClick={reset} disabled={!stats.ready}><Icon name="reset" /><span>Reiniciar</span><kbd>R</kbd></button></div>
+        <div className="arsenal-slots" role="toolbar" aria-label="Selección de arsenal">
+          <button
+            type="button"
+            className={`weapon-slot ${stats.weapon === 'pistol' ? 'is-active' : ''}`}
+            data-active={stats.weapon === 'pistol'}
+            onClick={() => { controls.current?.setWeapon('pistol'); controls.current?.focus(); }}
+            title="Pistola · Tecla 1"
+          >
+            <span className="weapon-slot-key">01</span>
+            <WeaponIcon name="pistol" />
+            <div><strong>Pistola</strong><small>SEMIAUTOMÁTICA</small></div>
+            <span className="infinite" title="Munición infinita">∞</span>
+          </button>
+          <button
+            type="button"
+            className={`weapon-slot ${stats.weapon === 'shotgun' ? 'is-active' : ''}`}
+            data-active={stats.weapon === 'shotgun'}
+            onClick={() => { controls.current?.setWeapon('shotgun'); controls.current?.focus(); }}
+            title="Escopeta · Tecla 2"
+          >
+            <span className="weapon-slot-key">02</span>
+            <WeaponIcon name="shotgun" />
+            <div><strong>Escopeta</strong><small>DISPERSIÓN</small></div>
+            <span className="infinite" title="Munición infinita">∞</span>
+          </button>
+          <button
+            type="button"
+            className={`weapon-slot ${stats.weapon === 'grenade' ? 'is-active' : ''}`}
+            data-active={stats.weapon === 'grenade'}
+            onClick={() => { controls.current?.setWeapon('grenade'); controls.current?.focus(); }}
+            title="Lanzagranadas · Tecla 3"
+          >
+            <span className="weapon-slot-key">03</span>
+            <WeaponIcon name="grenade" />
+            <div><strong>Granadas</strong><small>EXPLOSIVO</small></div>
+            <span className="infinite" title="Munición infinita">∞</span>
+          </button>
+        </div>
+        <div className="shortcuts">
+          <span><kbd>A</kbd><kbd>D</kbd> Mover</span>
+          <span><kbd>W</kbd> Saltar</span>
+          <span><kbd>S</kbd> Bajar</span>
+          <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> / Rueda Armas</span>
+          <span><Icon name="cross" /> Disparar</span>
+        </div>
+        <div className="game-actions">
+          <button className="icon-button" onClick={() => controls.current?.pause(!stats.paused)} disabled={!stats.ready} aria-label={stats.paused ? 'Continuar' : 'Pausar'} title="Pausa · Escape"><Icon name={stats.paused ? 'play' : 'pause'} /></button>
+          <button className="reset-button" onClick={reset} disabled={!stats.ready}><Icon name="reset" /><span>Reiniciar</span><kbd>R</kbd></button>
+        </div>
       </div>
     </section>
 
