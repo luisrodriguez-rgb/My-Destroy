@@ -106,21 +106,24 @@ export class DOMTextManager {
    */
   splitOnImpact(blastX: number, blastY: number, radius: number, maxSplits = 14): TextSplitResult[] {
     const hits: TextSplitResult[] = [];
-    const radiusSq = (radius + 8) * (radius + 8);
+    const maxMargin = Math.max(2, radius * 0.4);
+    const maxDistSq = (radius + maxMargin) * (radius + maxMargin);
 
     for (const ch of this.chars) {
       if (ch.detached) continue;
 
-      const cx = ch.worldX + ch.width / 2;
-      const cy = ch.worldY + ch.height / 2;
-      const dx = cx - blastX;
-      const dy = cy - blastY;
+      // Find closest point on character's bounding box to the blast center
+      const closeX = Math.max(ch.worldX, Math.min(ch.worldX + ch.width, blastX));
+      const closeY = Math.max(ch.worldY, Math.min(ch.worldY + ch.height, blastY));
+      const dx = closeX - blastX;
+      const dy = closeY - blastY;
       const distSq = dx * dx + dy * dy;
 
-      if (distSq <= radiusSq) {
-        const dist = Math.sqrt(distSq);
-        const radialAngle = Math.atan2(dy, dx);
-        hits.push({ char: ch, radialAngle, distance: dist });
+      if (distSq <= maxDistSq) {
+        const cx = ch.worldX + ch.width / 2;
+        const cy = ch.worldY + ch.height / 2;
+        const radialAngle = Math.atan2(cy - blastY, cx - blastX);
+        hits.push({ char: ch, radialAngle, distance: Math.sqrt(distSq) });
       }
     }
 
