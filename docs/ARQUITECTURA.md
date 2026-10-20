@@ -75,22 +75,26 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
 
 ### E. Sistema de Armas (`src/game/weapons/`)
 - Arquitectura basada en datos:
-  - `WeaponConfig`: define nombre, categoría, cadencia (*cooldown*), destello, retroceso, radio de daño y comportamiento de proyectiles.
-  - **Pistola**: impacto directo puntual de 28 px.
-  - **Escopeta**: calcula abanico simétrico (`calculateSpreadAngles()`) y dispara 5 perdigones simultáneos con desvío aleatorio menor y perforaciones de 16 px.
-  - **Lanzagranadas**: proyectiles con velocidad vectorial, gravedad y colisión elástica (rebotando contra plataformas y suelo con coeficiente de restitución), que al detonar por tiempo o impacto en vacío ejecutan un cráter de 54 px con sacudida de pantalla.
+  - `WeaponConfig`: define identificador (`WeaponId`), nombre, categoría, cadencia (*cooldown*), destello, retroceso, radio de daño y comportamiento de proyectiles.
+  - **Slot 01: Pistola (`pistol`)**: disparo semiautomático puntual con radio de daño de 28 px y cadencia de 220 ms.
+  - **Slot 02: Escopeta (`shotgun`)**: calcula abanico simétrico (`calculateSpreadAngles()`) y dispara 5 perdigones simultáneos con desvío aleatorio menor y perforaciones de 16 px (cadencia de 650 ms).
+  - **Slot 03: Lanzagranadas (`grenade`)**: proyectiles con velocidad vectorial, gravedad y colisión elástica (rebotando contra plataformas y suelo con coeficiente de restitución), que al detonar por tiempo (1.2 s) o impacto en vacío ejecutan un cráter de 54 px con sacudida de pantalla.
+  - **Slot 04: Láser Térmico Continuo (`laser`)**: disparo continuo de alta frecuencia (cadencia de 42 ms) mientras se mantiene presionado el puntero. Traza un haz térmico multicapa con resplandor exterior naranja (`#ff4d0044`), núcleo medio ámbar y filamento central incandescente blanco (`#ffffff`), proyectando chispas y esculpiendo cortes rectilíneos de 12 px con retroceso micro-amortiguado (1.2 px).
+  - **Slot 05: Singularidad Gravitatoria (`vortex`)**: proyectil de antimateria lanzado balísticamente que desacelera en el aire ($v \times 0.96$) y forma un vórtice gravitacional activo. Ejerce atracción radial centrípeta y torbellino tangencial (`applyVortexPull`) sobre escombros y letras en un radio de 320 px, desintegra la materia que cruza el horizonte de sucesos ($r < 14\text{ px}$) y culmina en un colapso e implosión cósmica a los 1.6 s con un cráter de 76 px y una onda de choque expansiva de 620 N.
 
 ### F. Síntesis Sonora Procedural (`src/game/audio/ShotAudio.ts`)
 - Utiliza la Web Audio API estándar del navegador para sintetizar sonido dinámico sin dependencias de red ni ficheros de audio estáticos.
 - Genera osciladores con curvas exponenciales de frecuencia y envolventes de ganancia para simular:
-  - Disparo de pistola.
-  - Descarga percutora de escopeta.
+  - Disparo de pistola y descarga percutora de escopeta.
   - Lanzamiento de granada y su rebote elástico.
   - Retumbe de baja frecuencia con filtro paso-bajo en la detonación.
+  - **Pulso de láser térmico (`laserPulse`)**: síntesis híbrida de diente de sierra con filtro paso-alto y paso-banda saturado para lograr el chisporroteo eléctrico e incandescencia.
+  - **Singularidad cósmica**: silbido ascendente gravitacional (`vortexLaunch`), pulso resonante sub-grave del disco de acreción (`vortexHum`) y colapso de vacío con caída exponencial e impacto explosivo (`vortexImplosion`).
 
 ### G. Deconstrucción y Fractura de Texto DOM (`src/game/text/DOMTextManager.ts`)
 - Mapea líneas tipográficas (`TextRunInput`) en cajas envolventes con anchos métricos proporcionales para cada glifo visible.
-- **Desprendimiento físico por impacto (`splitOnImpact`)**: al impactar cualquier arma (pistola, escopeta, granada), calcula qué letras caen dentro del radio de la onda expansiva.
+- **Desprendimiento físico por impacto (`splitOnImpact`)**: al impactar cualquier arma (pistola, escopeta, granada, láser o colapso de singularidad), calcula qué letras caen dentro del radio de la onda expansiva.
 - **Borrado de la superficie (`surface.clearArea`)**: elimina la silueta del carácter en la textura de papel para evitar glifos fantasma duplicados, descubriendo el sustrato digital interactivo.
 - **Cuerpos rígidos dinámicos en Rapier2D (`spawnLetterDebris`)**: proyecta las letras con impulso radial, elevación y torque de rotación con colisionadores cuboid y detección continua de colisiones (CCD), posándose y rebotando sobre pasarelas y plataformas.
+- **Interacción gravitacional**: las letras libres responden a `applyVortexPull()`, orbitando hacia el centro del vórtice antes de su desintegración.
 
