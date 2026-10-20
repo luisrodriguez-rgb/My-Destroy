@@ -87,3 +87,10 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
   - Descarga percutora de escopeta.
   - Lanzamiento de granada y su rebote elástico.
   - Retumbe de baja frecuencia con filtro paso-bajo en la detonación.
+
+### G. Deconstrucción y Fractura de Texto DOM (`src/game/text/DOMTextManager.ts`)
+- Mapea líneas tipográficas (`TextRunInput`) en cajas envolventes con anchos métricos proporcionales para cada glifo visible.
+- **Desprendimiento físico por impacto (`splitOnImpact`)**: al impactar cualquier arma (pistola, escopeta, granada), calcula qué letras caen dentro del radio de la onda expansiva.
+- **Borrado de la superficie (`surface.clearArea`)**: elimina la silueta del carácter en la textura de papel para evitar glifos fantasma duplicados, descubriendo el sustrato digital interactivo.
+- **Cuerpos rígidos dinámicos en Rapier2D (`spawnLetterDebris`)**: proyecta las letras con impulso radial, elevación y torque de rotación con colisionadores cuboid y detección continua de colisiones (CCD), posándose y rebotando sobre pasarelas y plataformas.
+
