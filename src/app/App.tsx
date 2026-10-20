@@ -199,7 +199,7 @@ export function App() {
 
           {scrapeError && (
             <span className="scrape-error-badge" role="alert" title={scrapeError}>
-              {scrapeError.length > 28 ? `${scrapeError.slice(0, 28)}…` : scrapeError}
+              {scrapeError}
             </span>
           )}
         </form>

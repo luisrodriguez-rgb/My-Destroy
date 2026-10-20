@@ -49,10 +49,18 @@ let browserInstance: Browser | null = null;
 
 export async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.isConnected()) {
-    browserInstance = await chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
+    try {
+      browserInstance = await chromium.launch({
+        channel: 'chrome',
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      });
+    } catch {
+      browserInstance = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      });
+    }
   }
   return browserInstance;
 }
@@ -264,11 +272,24 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
   }
 
   let validUrl = normalized;
-  if (!validUrl.startsWith('http://') && !validUrl.startsWith('https://')) {
+  if (validUrl.includes('://')) {
+    if (!validUrl.startsWith('http://') && !validUrl.startsWith('https://')) {
+      throw new Error('Solo se permiten protocolos http:// y https://');
+    }
+  } else {
     validUrl = 'https://' + validUrl;
   }
 
-  const browser = await getBrowser();
+  let browser: Browser;
+  try {
+    browser = await getBrowser();
+  } catch (err) {
+    const fallback = getPresetPage('wikipedia');
+    fallback.url = validUrl;
+    fallback.title = `${validUrl} (Modo Fuera de Línea)`;
+    return fallback;
+  }
+
   const context = await browser.newContext({
     viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
     deviceScaleFactor: 1, // Crucial for Retina pixel alignment

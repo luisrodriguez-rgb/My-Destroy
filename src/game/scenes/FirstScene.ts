@@ -574,12 +574,37 @@ export class FirstScene extends Phaser.Scene {
   }
 
   async loadCustomPage(data: ScrapedPageResult): Promise<void> {
-    const img = new Image();
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error('Failed to load page screenshot'));
-      img.src = data.screenshot;
-    });
+    let sourceElement: HTMLCanvasElement | HTMLImageElement;
+
+    if (data.screenshot && data.screenshot.startsWith('data:image/')) {
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Failed to load page screenshot'));
+        img.src = data.screenshot;
+      });
+      sourceElement = img;
+    } else {
+      const canvas = document.createElement('canvas');
+      canvas.width = PAPER.width;
+      canvas.height = PAPER.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#f8f9fa';
+      ctx.fillRect(0, 0, PAPER.width, PAPER.height);
+      ctx.fillStyle = '#202122';
+      ctx.font = 'bold 26px Georgia';
+      ctx.fillText(data.title || data.url, 48, 55);
+      ctx.fillStyle = '#a2a9b1';
+      ctx.fillRect(48, 72, PAPER.width - 96, 1);
+      for (const p of data.platforms) {
+        ctx.fillStyle = '#eaecf0';
+        ctx.fillRect(p.x, p.y, p.width, p.height);
+        ctx.fillStyle = '#36414c';
+        ctx.font = '11px sans-serif';
+        ctx.fillText(p.name, p.x + 8, p.y + Math.min(18, p.height - 4));
+      }
+      sourceElement = canvas;
+    }
 
     this.clearEffects();
     this.audio.stop();
@@ -590,7 +615,7 @@ export class FirstScene extends Phaser.Scene {
     this.resets++;
 
     // 1. Surface: draw new image and reset regions
-    this.surface.loadPage(img);
+    this.surface.loadPage(sourceElement);
 
     // 2. Map platforms to world space
     const worldPlatforms: Platform[] = data.platforms.map(p => ({
@@ -665,7 +690,7 @@ export class FirstScene extends Phaser.Scene {
       debris: this.debrisManager ? this.debrisManager.count : 0,
       detachables: this.detachables.length,
       platforms: this.currentPlatforms.length,
-      objects: this.children.length,
+      objects: this.children.length + (this.debrisLayer ? this.debrisLayer.length : 0),
       sourceFrames: this.surface?.source.getFrameNames(true).length,
       resets: this.resets,
       playerX: this.controller ? this.controller.x : 350,
