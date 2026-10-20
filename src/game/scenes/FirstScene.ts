@@ -17,6 +17,7 @@ type Fragment = { image: Phaser.GameObjects.Image; vx: number; vy: number; spin:
 type Dust = { x: number; y: number; vx: number; vy: number; life: number; duration: number; size: number; color: number };
 type ShotTracer = { mx: number; my: number; x: number; y: number; hit: boolean };
 type Grenade = { x: number; y: number; vx: number; vy: number; fuse: number; blastRadius: number; angle: number; spin: number };
+type Vortex = { x: number; y: number; vx: number; vy: number; fuse: number; maxFuse: number; blastRadius: number; angle: number; spin: number };
 
 export interface ActiveDetachable {
   id: string;
@@ -48,6 +49,7 @@ export class FirstScene extends Phaser.Scene {
   private debrisLayer!: Phaser.GameObjects.Container;
   private dust: Dust[] = [];
   private grenades: Grenade[] = [];
+  private vortices: Vortex[] = [];
   private keys = new Set<string>();
   private aim = { x: 825, y: 220 };
   private inside = false;
@@ -206,7 +208,7 @@ export class FirstScene extends Phaser.Scene {
   private onKeyDown = (event: KeyboardEvent) => {
     const handled = [
       'KeyA', 'KeyD', 'ArrowLeft', 'ArrowRight', 'KeyW', 'ArrowUp', 'Space', 'KeyS', 'ArrowDown',
-      'Digit1', 'Numpad1', 'Digit2', 'Numpad2', 'Digit3', 'Numpad3',
+      'Digit1', 'Numpad1', 'Digit2', 'Numpad2', 'Digit3', 'Numpad3', 'Digit4', 'Numpad4', 'Digit5', 'Numpad5',
       'KeyR', 'KeyM', 'Escape',
     ];
     if (!handled.includes(event.code)) return;
@@ -216,6 +218,8 @@ export class FirstScene extends Phaser.Scene {
     if (['Digit1', 'Numpad1'].includes(event.code)) this.setWeapon('pistol');
     if (['Digit2', 'Numpad2'].includes(event.code)) this.setWeapon('shotgun');
     if (['Digit3', 'Numpad3'].includes(event.code)) this.setWeapon('grenade');
+    if (['Digit4', 'Numpad4'].includes(event.code)) this.setWeapon('laser');
+    if (['Digit5', 'Numpad5'].includes(event.code)) this.setWeapon('vortex');
     if (event.code === 'KeyR') this.resetLevel();
     if (event.code === 'KeyM') this.callbacks.toggleMute();
     if (event.code === 'Escape') this.setPaused(!this.paused);
@@ -435,7 +439,57 @@ export class FirstScene extends Phaser.Scene {
       return;
     }
 
-    // 3. PISTOL (precision single hit)
+    // 3. VORTEX / GRAVITATIONAL SINGULARITY
+    if (this.currentWeaponId === 'vortex') {
+      const proj = weapon.projectile!;
+      const speed = proj.speed;
+      const vx = Math.cos(baseAngle) * speed + this.controller.vx * 0.25;
+      const vy = Math.sin(baseAngle) * speed + this.controller.vy * 0.25;
+      this.vortices.push({
+        x: mx,
+        y: my,
+        vx,
+        vy,
+        fuse: proj.fuseMs,
+        maxFuse: proj.fuseMs,
+        blastRadius: proj.blastRadius,
+        angle: baseAngle,
+        spin: 6,
+      });
+      this.lastShot = {
+        time: now,
+        flash: weapon.flash,
+        weapon: 'vortex',
+        tracers: [{ mx, my, x: mx + Math.cos(baseAngle) * 24, y: my + Math.sin(baseAngle) * 24, hit: false }],
+      };
+      this.audio.vortexLaunch();
+      this.notify();
+      return;
+    }
+
+    // 4. THERMAL LASER BEAM
+    if (this.currentWeaponId === 'laser') {
+      const hit = this.surface.hit(this.aim.x, this.aim.y);
+      const tracers: ShotTracer[] = [{ mx, my, x: this.aim.x, y: this.aim.y, hit }];
+      this.lastShot = { time: now, flash: weapon.flash, weapon: 'laser', tracers };
+
+      if (hit) {
+        const result = this.surface.damage(this.aim.x, this.aim.y, weapon.radius, this.shots * 1.77);
+        if (result.removed.length) {
+          this.hits++;
+          this.emitImpact(this.aim.x, this.aim.y, baseAngle, weapon.radius, weapon.fragments);
+          this.debrisManager?.applyBlastImpulse(this.aim.x, this.aim.y, weapon.radius * 1.1, 95);
+          this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+          this.checkDetachables();
+          this.checkTextSplits(this.aim.x, this.aim.y, weapon.radius);
+        }
+      }
+      this.audio.laserPulse(hit);
+      this.notify();
+      return;
+    }
+
+    // 5. PISTOL (precision single hit)
     const hit = this.surface.hit(this.aim.x, this.aim.y);
     const tracers: ShotTracer[] = [{ mx, my, x: this.aim.x, y: this.aim.y, hit }];
     this.lastShot = { time: now, flash: weapon.flash, weapon: 'pistol', tracers };
@@ -503,6 +557,7 @@ export class FirstScene extends Phaser.Scene {
     while (this.fragments.length) this.removeFragment(0);
     this.dust = [];
     this.grenades = [];
+    this.vortices = [];
     this.lastShot = undefined;
     this.effects?.clear();
   }
@@ -758,6 +813,7 @@ export class FirstScene extends Phaser.Scene {
       platform: this.controller ? this.controller.currentPlatformId : 'catwalk',
       weapon: this.currentWeaponId,
       grenades: this.grenades.length,
+      vortices: this.vortices.length,
       paused: this.paused,
       muted: this.prefs.muted,
       reducedMotion: this.prefs.reducedMotion,
@@ -807,6 +863,13 @@ export class FirstScene extends Phaser.Scene {
 
     const shoulderY = this.controller.y - 28;
     const angle = Math.atan2(this.aim.y - shoulderY, this.aim.x - this.controller.x);
+
+    // Continuous automatic laser firing while holding mouse button down
+    if (this.input.activePointer.isDown && this.currentWeaponId === 'laser' && !this.paused) {
+      this.aim = this.pointerPosition(this.input.activePointer);
+      this.shoot();
+    }
+
     const w = this.currentWeapon;
     const elapsed = this.time.now - this.shotTime;
     const recoil = Math.max(0, 1 - elapsed / w.recovery) * w.recoil;
@@ -834,6 +897,20 @@ export class FirstScene extends Phaser.Scene {
       this.arm.fillStyle(0x1a2d36).fillRect(11 - recoil, -7, 14, 14);
       this.arm.fillStyle(COLORS.amber).fillRect(14 - recoil, -4, 8, 8);
       this.arm.fillStyle(COLORS.cyan).fillRect(34 - recoil, -6, 6, 6);
+    } else if (this.currentWeaponId === 'laser') {
+      // Thermal Laser: high-tech elongated rifle, cyan energy conduits, orange focusing emitter
+      this.arm.fillStyle(COLORS.ink).fillRect(3 - recoil, -6, 42, 11);
+      this.arm.fillStyle(0x1a2d36).fillRect(12 - recoil, -7, 28, 5);
+      this.arm.fillStyle(COLORS.cyan).fillRect(16 - recoil, -5, 20, 2);
+      this.arm.fillStyle(0xff6b00).fillRect(38 - recoil, -5, 7, 9);
+      this.arm.fillStyle(COLORS.amber).fillRect(5 - recoil, -1, 10, 7);
+    } else if (this.currentWeaponId === 'vortex') {
+      // Gravitational Singularity Cannon: heavy magnetic containment coils, dark core, violet emitter
+      this.arm.fillStyle(COLORS.ink).fillRect(2 - recoil, -9, 40, 17);
+      this.arm.fillStyle(0x0f1722).fillRect(14 - recoil, -10, 24, 19);
+      this.arm.fillStyle(0x9b5de5).fillRect(20 - recoil, -8, 8, 15);
+      this.arm.fillStyle(COLORS.cyan).fillRect(32 - recoil, -6, 6, 11);
+      this.arm.fillStyle(COLORS.amber).fillRect(4 - recoil, -3, 9, 9);
     }
 
     this.effects.clear();
@@ -862,6 +939,27 @@ export class FirstScene extends Phaser.Scene {
         // Launch puff
         const mx = s.tracers[0].mx, my = s.tracers[0].my;
         this.effects.fillStyle(0xffd494, 0.7 * progress).fillRect(mx - 4, my - 4, 8, 8);
+      } else if (s.weapon === 'laser') {
+        const t = s.tracers[0];
+        // Outer thermal glow
+        this.effects.lineStyle(6, 0xff5500, 0.45 * progress).lineBetween(t.mx, t.my, t.x, t.y);
+        // Mid incandescent core
+        this.effects.lineStyle(3, 0xffb454, 0.8 * progress).lineBetween(t.mx, t.my, t.x, t.y);
+        // Inner intense white core
+        this.effects.lineStyle(1.2, 0xffffff, 0.95 * progress).lineBetween(t.mx, t.my, t.x, t.y);
+
+        // Muzzle optic discharge
+        this.effects.fillStyle(0xffffff, 0.9).fillRect(t.mx - 4, t.my - 4, 8, 8);
+        this.effects.fillStyle(0xff5500, 0.7).fillRect(t.mx - 7, t.my - 2, 14, 4);
+
+        if (t.hit) {
+          this.effects.fillStyle(0xffffff, 0.9).fillCircle(t.x, t.y, 4);
+          this.effects.lineStyle(2, 0xff7700, 0.8 * progress).strokeCircle(t.x, t.y, 8 + (1 - progress) * 6);
+        }
+      } else if (s.weapon === 'vortex') {
+        const mx = s.tracers[0].mx, my = s.tracers[0].my;
+        this.effects.fillStyle(0x9b5de5, 0.85 * progress).fillCircle(mx, my, 8);
+        this.effects.lineStyle(2, COLORS.cyan, 0.75 * progress).strokeCircle(mx, my, 14);
       }
     }
 
@@ -926,6 +1024,86 @@ export class FirstScene extends Phaser.Scene {
       this.effects.fillStyle(fuseBlink ? 0xff4d4d : COLORS.amber).fillRect(Math.round(g.x) - 2, Math.round(g.y) - 2, 4, 4);
     }
 
+    // Update and draw flying & swirling singularities
+    for (let i = this.vortices.length - 1; i >= 0; i--) {
+      const v = this.vortices[i];
+      v.vy += 340 * dt;
+      v.x += v.vx * dt;
+      v.y += v.vy * dt;
+      v.vx *= 0.96;
+      v.vy *= 0.96;
+      v.angle += v.spin * dt;
+      v.fuse -= dt * 1000;
+
+      // Catwalk containment
+      if (v.y >= WORLD.floor - 8) {
+        v.y = WORLD.floor - 8;
+        v.vy = -Math.abs(v.vy) * 0.2;
+        v.vx *= 0.85;
+      }
+
+      // Gravitational attraction vortex pulling nearby debris & letters
+      this.debrisManager?.applyVortexPull(v.x, v.y, 220, 360, dt);
+
+      // Periodically trigger a pulse hum
+      if (Math.random() < 0.08) {
+        this.audio.vortexHum();
+      }
+
+      // Gravitational Collapse / Detonation
+      if (v.fuse <= 0) {
+        const result = this.surface.damage(v.x, v.y, v.blastRadius, Math.random() * 9999);
+        if (result.removed.length) {
+          this.hits++;
+          this.emitImpact(v.x, v.y, -Math.PI / 2, v.blastRadius, 32);
+        }
+        // Blast impulse to scatter debris outward upon collapse
+        this.debrisManager?.applyBlastImpulse(v.x, v.y, v.blastRadius * 1.4, 620);
+        this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+        this.checkDetachables();
+        this.checkTextSplits(v.x, v.y, v.blastRadius);
+        this.audio.vortexImplosion();
+
+        if (!this.prefs.reducedMotion) {
+          this.cameras.main.shake(180, 0.012);
+        }
+
+        // Violent collapse shockwave effect
+        this.effects.fillStyle(0x0b1018, 0.95).fillCircle(v.x, v.y, v.blastRadius * 0.7);
+        this.effects.lineStyle(4, COLORS.cyan, 0.95).strokeCircle(v.x, v.y, v.blastRadius);
+        this.effects.lineStyle(2, 0x9b5de5, 0.9).strokeCircle(v.x, v.y, v.blastRadius * 1.3);
+
+        this.vortices.splice(i, 1);
+        this.notify();
+        continue;
+      }
+
+      // Draw swirling accretion disk
+      const vProgress = 1 - v.fuse / v.maxFuse;
+      const coreR = Math.max(6, 12 * Math.sin(vProgress * Math.PI));
+
+      // 1. Dark event horizon center
+      this.effects.fillStyle(0x05070a, 0.95).fillCircle(v.x, v.y, coreR);
+
+      // 2. Swirling glowing accretion rings
+      this.effects.lineStyle(2, COLORS.cyan, 0.85);
+      this.effects.strokeCircle(v.x, v.y, coreR + 4);
+
+      this.effects.lineStyle(1.5, 0x9b5de5, 0.75);
+      this.effects.strokeCircle(v.x, v.y, coreR + 9 + Math.sin(v.angle) * 3);
+
+      this.effects.lineStyle(1, COLORS.amber, 0.6);
+      this.effects.strokeCircle(v.x, v.y, coreR + 15 + Math.cos(v.angle) * 4);
+
+      // 3. Orbiting gravitational jets
+      for (let j = 0; j < 3; j++) {
+        const jetAngle = v.angle + (j * Math.PI * 2) / 3;
+        const jx = v.x + Math.cos(jetAngle) * (coreR + 8);
+        const jy = v.y + Math.sin(jetAngle) * (coreR + 8);
+        this.effects.fillStyle(0x79e3d8, 0.9).fillRect(jx - 1.5, jy - 1.5, 3, 3);
+      }
+    }
+
     // Update fragments
     for (let i = this.fragments.length - 1; i >= 0; i--) {
       const p = this.fragments[i]; p.life -= dt * 1000;
@@ -970,6 +1148,22 @@ export class FirstScene extends Phaser.Scene {
         for (const [ax, ay, bx, by] of [[-16, 0, -8, 0], [8, 0, 16, 0], [0, -16, 0, -8], [0, 8, 0, 16]]) {
           this.reticle.lineBetween(x + ax, y + ay, x + bx, y + by);
         }
+      } else if (this.currentWeaponId === 'laser') {
+        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, 6);
+        this.reticle.lineStyle(1, 0xff7700, 1).strokeCircle(x, y, 5);
+        this.reticle.lineStyle(1, COLORS.cyan, 0.9);
+        for (const [ax, ay, bx, by] of [[-10, 0, -3, 0], [3, 0, 10, 0], [0, -10, 0, -3], [0, 3, 0, 10]]) {
+          this.reticle.lineBetween(x + ax, y + ay, x + bx, y + by);
+        }
+        this.reticle.fillStyle(0xffffff).fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
+      } else if (this.currentWeaponId === 'vortex') {
+        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, 18);
+        this.reticle.lineStyle(1.5, 0x9b5de5, 1).strokeCircle(x, y, 17);
+        this.reticle.lineStyle(1, COLORS.cyan, 0.8).strokeCircle(x, y, 7);
+        for (const [ax, ay, bx, by] of [[-24, 0, -17, 0], [17, 0, 24, 0], [0, -24, 0, -17], [0, 17, 0, 24]]) {
+          this.reticle.lineBetween(x + ax, y + ay, x + bx, y + by);
+        }
+        this.reticle.fillStyle(0x9b5de5).fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
       }
     }
   }

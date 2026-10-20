@@ -147,4 +147,37 @@ describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
 
     manager.destroy();
   });
+
+  it('applies gravitational vortex pull and swallows matter in event horizon', async () => {
+    const { mockHost } = createMockHost();
+    const manager = new DebrisManager(mockHost);
+    await manager.init();
+
+    manager.spawnLetterDebris(
+      {
+        id: 'c-2',
+        char: 'X',
+        x: 400,
+        y: 200,
+        width: 14,
+        height: 20,
+        fontSize: 20,
+        fontFamily: 'Georgia',
+        color: '#2c3431',
+      },
+      'letter-c-2',
+      0,
+      10
+    );
+
+    expect(manager.count).toBe(1);
+
+    // Apply vortex pull near the letter at (405, 205)
+    manager.applyVortexPull(405, 205, 100, 300, 0.016);
+
+    // Because distance is < 14px, it should be annihilated in the event horizon
+    expect(manager.count).toBe(0);
+
+    manager.destroy();
+  });
 });

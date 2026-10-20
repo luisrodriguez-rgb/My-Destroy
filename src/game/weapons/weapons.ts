@@ -46,9 +46,40 @@ export const WEAPONS: Record<WeaponId, WeaponConfig> = {
       blastRadius: 54,
     },
   },
+  laser: {
+    id: 'laser',
+    name: 'Láser Térmico',
+    category: 'RAYO CONTINUO',
+    cooldown: 42,
+    radius: 12,
+    flash: 28,
+    recovery: 35,
+    recoil: 1.2,
+    fragments: 4,
+  },
+  vortex: {
+    id: 'vortex',
+    name: 'Singularidad',
+    category: 'VÓRTICE GRAVITATORIO',
+    cooldown: 1150,
+    radius: 76,
+    flash: 85,
+    recovery: 320,
+    recoil: 14,
+    fragments: 30,
+    projectile: {
+      speed: 380,
+      gravity: 340,
+      bounce: 0.2,
+      friction: 0.95,
+      fuseMs: 1600,
+      radius: 8,
+      blastRadius: 76,
+    },
+  },
 };
 
-export const WEAPON_ORDER: WeaponId[] = ['pistol', 'shotgun', 'grenade'];
+export const WEAPON_ORDER: WeaponId[] = ['pistol', 'shotgun', 'grenade', 'laser', 'vortex'];
 
 /**
  * Calculates spread angles for multi-pellet weapons.

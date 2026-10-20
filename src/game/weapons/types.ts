@@ -1,4 +1,4 @@
-export type WeaponId = 'pistol' | 'shotgun' | 'grenade';
+export type WeaponId = 'pistol' | 'shotgun' | 'grenade' | 'laser' | 'vortex';
 
 export interface ProjectileConfig {
   speed: number;

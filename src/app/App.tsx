@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { EMPTY_STATS, type Preferences, type SceneControls } from '../game/bridge';
+import { EMPTY_STATS, type Preferences, type SceneControls, type WeaponId } from '../game/bridge';
 
 function readPreferences(): Preferences {
   const defaults = { muted: false, reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches };
@@ -20,14 +20,33 @@ function Icon({ name }: { name: 'sound' | 'muted' | 'reset' | 'pause' | 'play' |
   return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="square" strokeLinejoin="miter">{paths[name]}</svg>;
 }
 
-function WeaponIcon({ name }: { name: 'pistol' | 'shotgun' | 'grenade' }) {
+function WeaponIcon({ name }: { name: WeaponId }) {
   if (name === 'pistol') {
     return <svg viewBox="0 0 48 28" aria-hidden="true"><path fill="currentColor" d="M6 6h30v3h7v7H21v3h-3v8H8v-7H5V9h1z" /><path fill="#79e3d8" d="M13 9h20v3H13z" /><path fill="#0b1018" d="M12 19h4v5h-4z" /></svg>;
   }
   if (name === 'shotgun') {
     return <svg viewBox="0 0 48 28" aria-hidden="true"><path fill="currentColor" d="M2 10h35V7h8v10H18v4h-3v5H6v-9H2z" /><path fill="#79e3d8" d="M21 10h20v3H21z" /></svg>;
   }
-  return <svg viewBox="0 0 48 28" aria-hidden="true"><path fill="currentColor" d="M20 3h11v3H20zM17 8h17v4h4v10h-4v4H17v-4h-4V12h4z" /><path fill="#79e3d8" d="M18 14h4v8h-4z" /></svg>;
+  if (name === 'grenade') {
+    return <svg viewBox="0 0 48 28" aria-hidden="true"><path fill="currentColor" d="M20 3h11v3H20zM17 8h17v4h4v10h-4v4H17v-4h-4V12h4z" /><path fill="#79e3d8" d="M18 14h4v8h-4z" /></svg>;
+  }
+  if (name === 'laser') {
+    return (
+      <svg viewBox="0 0 48 28" aria-hidden="true">
+        <path fill="currentColor" d="M4 11h28v6H4zM32 9h10v10H32z" />
+        <path fill="#ff6b00" d="M12 13h16v2H12zM42 12h4v4h-4z" />
+        <path fill="#79e3d8" d="M16 8h12v2H16zM16 18h12v2H16z" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 48 28" aria-hidden="true">
+      <path fill="currentColor" d="M8 8h12v12H8zM28 8h12v12H28z" />
+      <circle cx="24" cy="14" r="9" fill="#0b1018" stroke="#9b5de5" strokeWidth="2.5" />
+      <circle cx="24" cy="14" r="5" fill="#000000" stroke="#79e3d8" strokeWidth="1.5" />
+      <path fill="#79e3d8" d="M23 13h2v2h-2z" />
+    </svg>
+  );
 }
 
 export function App() {
@@ -267,12 +286,36 @@ export function App() {
             <div><strong>Granadas</strong><small>EXPLOSIVO</small></div>
             <span className="infinite" title="Munición infinita">∞</span>
           </button>
+          <button
+            type="button"
+            className={`weapon-slot ${stats.weapon === 'laser' ? 'is-active' : ''}`}
+            data-active={stats.weapon === 'laser'}
+            onClick={() => { controls.current?.setWeapon('laser'); controls.current?.focus(); }}
+            title="Láser Térmico · Tecla 4"
+          >
+            <span className="weapon-slot-key">04</span>
+            <WeaponIcon name="laser" />
+            <div><strong>Láser</strong><small>CONTINUO</small></div>
+            <span className="infinite" title="Munición infinita">∞</span>
+          </button>
+          <button
+            type="button"
+            className={`weapon-slot ${stats.weapon === 'vortex' ? 'is-active' : ''}`}
+            data-active={stats.weapon === 'vortex'}
+            onClick={() => { controls.current?.setWeapon('vortex'); controls.current?.focus(); }}
+            title="Singularidad Gravitatoria · Tecla 5"
+          >
+            <span className="weapon-slot-key">05</span>
+            <WeaponIcon name="vortex" />
+            <div><strong>Vórtice</strong><small>SINGULARIDAD</small></div>
+            <span className="infinite" title="Munición infinita">∞</span>
+          </button>
         </div>
         <div className="shortcuts">
           <span><kbd>A</kbd><kbd>D</kbd> Mover</span>
           <span><kbd>W</kbd> Saltar</span>
           <span><kbd>S</kbd> Bajar</span>
-          <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> / Rueda Armas</span>
+          <span><kbd>1</kbd>–<kbd>5</kbd> / Rueda</span>
           <span><Icon name="cross" /> Disparar</span>
         </div>
         <div className="game-actions">

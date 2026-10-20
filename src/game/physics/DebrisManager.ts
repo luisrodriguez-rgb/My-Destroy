@@ -306,6 +306,52 @@ export class DebrisManager {
     }
   }
 
+  /**
+   * Applies an inward gravitational vortex force pulling nearby debris towards (x, y)
+   * with tangential spiral torque and event horizon annihilation.
+   */
+  applyVortexPull(x: number, y: number, pullRadius: number, pullForce = 350, dt = 0.016): void {
+    if (!this.world || !this.isInitialized) return;
+    const pullRadiusSq = pullRadius * pullRadius;
+
+    for (let i = this.activeDebris.length - 1; i >= 0; i--) {
+      const piece = this.activeDebris[i];
+      const pos = piece.body.translation();
+      const dx = x - pos.x;
+      const dy = y - pos.y;
+      const distSq = dx * dx + dy * dy;
+
+      if (distSq < pullRadiusSq && distSq > 0.01) {
+        const dist = Math.sqrt(distSq);
+
+        // If swallowed into event horizon (< 14px), annihilate
+        if (dist < 14) {
+          this.removeDebris(i);
+          continue;
+        }
+
+        piece.body.wakeUp();
+        const factor = Math.max(0.15, 1 - dist / pullRadius);
+        const force = pullForce * factor;
+
+        // Inward pull towards singularity center
+        const pullX = (dx / dist) * force;
+        const pullY = (dy / dist) * force;
+
+        // Tangential spiral swirl
+        const swirlSpeed = force * 0.45;
+        const swirlX = (-dy / dist) * swirlSpeed;
+        const swirlY = (dx / dist) * swirlSpeed;
+
+        const impulseX = (pullX + swirlX) * dt * 35;
+        const impulseY = (pullY + swirlY) * dt * 35;
+
+        piece.body.applyImpulse({ x: impulseX, y: impulseY }, true);
+        piece.body.applyTorqueImpulse((Math.random() - 0.5) * 8 * dt, true);
+      }
+    }
+  }
+
   spawnFracture(x: number, y: number, radius: number, blastAngle: number, targetCount = 6, impulseForce = 220): void {
     if (!this.world || !this.isInitialized) return;
 

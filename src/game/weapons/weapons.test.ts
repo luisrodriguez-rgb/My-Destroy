@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { calculateSpreadAngles, WEAPONS, WEAPON_ORDER } from './weapons';
 
 describe('weapons', () => {
-  it('defines all 3 primary weapons with valid configs', () => {
-    expect(WEAPON_ORDER).toEqual(['pistol', 'shotgun', 'grenade']);
+  it('defines all 5 arsenal weapons with valid configs', () => {
+    expect(WEAPON_ORDER).toEqual(['pistol', 'shotgun', 'grenade', 'laser', 'vortex']);
     for (const id of WEAPON_ORDER) {
       const weapon = WEAPONS[id];
       expect(weapon.id).toBe(id);

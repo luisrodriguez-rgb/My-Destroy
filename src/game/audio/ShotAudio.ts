@@ -193,6 +193,114 @@ export class ShotAudio {
     } catch { /* Audio support is optional */ }
   }
 
+  laserPulse(hit: boolean) {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(hit ? 680 : 880, now);
+      osc.frequency.exponentialRampToValueAtTime(hit ? 320 : 440, now + 0.05);
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1400, now);
+      filter.Q.value = 3.5;
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.048);
+
+      osc.connect(filter).connect(gain).connect(ctx.destination);
+      this.track(osc, () => { filter.disconnect(); gain.disconnect(); });
+      osc.start(now);
+      osc.stop(now + 0.05);
+    } catch { /* Audio support is optional */ }
+  }
+
+  vortexLaunch() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(140, now);
+      osc.frequency.exponentialRampToValueAtTime(580, now + 0.32);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.22, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+
+      osc.connect(gain).connect(ctx.destination);
+      this.track(osc, () => gain.disconnect());
+      osc.start(now);
+      osc.stop(now + 0.35);
+    } catch { /* Audio support is optional */ }
+  }
+
+  vortexHum() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(65, now);
+      osc.frequency.linearRampToValueAtTime(95, now + 0.12);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.14, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+
+      osc.connect(gain).connect(ctx.destination);
+      this.track(osc, () => gain.disconnect());
+      osc.start(now);
+      osc.stop(now + 0.15);
+    } catch { /* Audio support is optional */ }
+  }
+
+  vortexImplosion() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      // 1. Vacuum sub-bass suck
+      const sub = ctx.createOscillator();
+      sub.type = 'sine';
+      sub.frequency.setValueAtTime(45, now);
+      sub.frequency.exponentialRampToValueAtTime(16, now + 0.45);
+
+      const subGain = ctx.createGain();
+      subGain.gain.setValueAtTime(0.48, now);
+      subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+
+      sub.connect(subGain).connect(ctx.destination);
+      this.track(sub, () => subGain.disconnect());
+      sub.start(now);
+      sub.stop(now + 0.5);
+
+      // 2. Cosmic implosion boom noise
+      const noiseBuf = this.getNoiseBuffer(ctx, 0.45);
+      const source = ctx.createBufferSource();
+      source.buffer = noiseBuf;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(450, now);
+      filter.frequency.exponentialRampToValueAtTime(60, now + 0.42);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.42, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.44);
+
+      source.connect(filter).connect(gain).connect(ctx.destination);
+      this.track(source, () => { filter.disconnect(); gain.disconnect(); });
+      source.start(now);
+      source.stop(now + 0.46);
+    } catch { /* Audio support is optional */ }
+  }
+
   private track(source: AudioScheduledSourceNode, cleanup: () => void) {
     this.voices.add(source);
     source.onended = () => { this.voices.delete(source); source.disconnect(); cleanup(); };
