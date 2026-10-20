@@ -1,25 +1,25 @@
 {
   "test": "60 seconds of real pointer clicks, 1 second settling, then reset",
-  "browser": "155.0.8059.82",
+  "browser": "155.0.8059.85",
   "system": "darwin arm64",
   "cpu": "Apple M5",
   "viewport": {
     "width": 1440,
     "height": 1100
   },
-  "clicks": 288,
-  "acceptedShots": 288,
-  "hits": 168,
-  "maxSampledFragments": 26,
+  "clicks": 289,
+  "acceptedShots": 289,
+  "hits": 156,
+  "maxSampledFragments": 29,
   "settledFragments": 0,
-  "objectsBefore": 49,
-  "objectsAfter": 49,
+  "objectsBefore": 54,
+  "objectsAfter": 174,
   "sourceFramesBefore": 1,
   "sourceFramesAfter": 1,
   "requestAnimationFrameMs": {
     "p50": 16.69999999999709,
     "p95": 16.700000000004366,
-    "samples": 3600
+    "samples": 3605
   },
   "note": "Headless Chrome observation, not a performance guarantee for other devices or proof of no heap leaks."
 }
