@@ -21,10 +21,23 @@ export interface DebrisPolygonData {
   v2: { x: number; y: number };
 }
 
+export interface LetterDebrisData {
+  id: string;
+  char: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  fontFamily: string;
+  color: string;
+}
+
 export interface DebrisHost {
   createDebrisImage(x: number, y: number, frameKey: string, originX?: number, originY?: number): VisualDebris;
   addDebrisPolygon?(data: DebrisPolygonData): void;
   addDebrisFrame?(frameKey: string, x: number, y: number, w: number, h: number): void;
+  addLetterFrame?(frameKey: string, charData: LetterDebrisData): void;
   removeDebrisFrame(frameKey: string): void;
 }
 
@@ -163,6 +176,55 @@ export class DebrisManager {
     const kickY = 15 + Math.random() * 25;
     const torque = (Math.random() - 0.5) * 9;
     body.setLinvel({ x: kickX, y: kickY }, true);
+    body.setAngvel(torque, true);
+
+    this.activeDebris.push({
+      visual,
+      body,
+      frameKey,
+      createdTime: Date.now(),
+    });
+  }
+
+  spawnLetterDebris(
+    data: LetterDebrisData,
+    frameKey: string,
+    radialAngle = -Math.PI / 2,
+    blastSpeed = 160
+  ): void {
+    if (!this.world || !this.isInitialized) return;
+
+    if (this.activeDebris.length >= this.maxDebris) {
+      this.removeDebris(0);
+    }
+
+    if (this.host.addLetterFrame) {
+      this.host.addLetterFrame(frameKey, data);
+    }
+
+    const cx = data.x + data.width / 2;
+    const cy = data.y + data.height / 2;
+
+    const visual = this.host.createDebrisImage(cx, cy, frameKey, 0.5, 0.5);
+
+    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(cx, cy)
+      .setCcdEnabled(true);
+    const body = this.world.createRigidBody(bodyDesc);
+
+    const halfW = Math.max(3, data.width / 2);
+    const halfH = Math.max(4, data.height / 2);
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(halfW, halfH);
+    colliderDesc.setRestitution(0.35);
+    colliderDesc.setFriction(0.65);
+    this.world.createCollider(colliderDesc, body);
+
+    const speed = blastSpeed * (0.7 + Math.random() * 0.6);
+    const vx = Math.cos(radialAngle) * speed + (Math.random() - 0.5) * 35;
+    const vy = Math.sin(radialAngle) * speed - (60 + Math.random() * 90);
+    const torque = (Math.random() - 0.5) * 16;
+
+    body.setLinvel({ x: vx, y: vy }, true);
     body.setAngvel(torque, true);
 
     this.activeDebris.push({

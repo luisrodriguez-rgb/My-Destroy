@@ -186,5 +186,37 @@ test('polygonal debris fractures with Delaunator and accumulates physically via 
   expect(state.debris).toBe(0);
 });
 
+test('DOM text splitting: impact over headings and paragraphs detaches individual letters with physics', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('canvas')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Reiniciar' })).toBeEnabled();
+
+  const initial = await snapshot(page);
+  expect(initial.textRemaining).toBeGreaterThan(150);
+  expect(initial.textDetached).toBe(0);
+
+  // Fire directly into the headline 'Internet,' located at worldX ~140, worldY ~206
+  await fire(page, 140, 206);
+  await page.waitForTimeout(250);
+
+  const afterFirstShot = await snapshot(page);
+  expect(afterFirstShot.textDetached).toBeGreaterThan(0);
+  expect(afterFirstShot.textRemaining).toBeLessThan(initial.textRemaining);
+  expect(afterFirstShot.debris).toBeGreaterThan(0);
+
+  // Fire into the second line 'hecho pedazos.' located at worldX ~140, worldY ~270
+  await fire(page, 140, 270);
+  await page.waitForTimeout(250);
+
+  const afterSecondShot = await snapshot(page);
+  expect(afterSecondShot.textDetached).toBeGreaterThan(afterFirstShot.textDetached);
+
+  // Reiniciar resets all detached characters back to intact
+  await page.getByRole('button', { name: 'Reiniciar' }).click();
+  const resetState = await snapshot(page);
+  expect(resetState.textDetached).toBe(0);
+  expect(resetState.textRemaining).toBe(initial.textRemaining);
+});
+
 
 

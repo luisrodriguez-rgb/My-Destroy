@@ -33,3 +33,20 @@ export function drawDemoPage(): HTMLCanvasElement {
   text('EDICIÓN 001  ·  OCT 2026', 889, 454, '10px monospace', '#82877b');
   return canvas;
 }
+
+export function getDemoTextRuns() {
+  return [
+    { id: 'brand', text: 'the everyday internet.', x: 48, y: 48, fontSize: 23, fontFamily: 'Georgia', color: '#2c3431' },
+    { id: 'nav', text: 'Ideas     Historias     Explorar', x: 817, y: 46, fontSize: 12, fontFamily: 'sans-serif', color: '#70766d' },
+    { id: 'issue', text: 'UNA PÁGINA DE EJEMPLO   /   Nº 001', x: 48, y: 112, fontSize: 10, fontFamily: 'monospace', color: '#7b8177' },
+    { id: 'h1-1', text: 'Internet,', x: 48, y: 184, fontSize: 65, fontFamily: 'Georgia', color: '#2c3431' },
+    { id: 'h1-2', text: 'hecho pedazos.', x: 48, y: 250, fontSize: 65, fontFamily: 'Georgia', color: '#2c3431' },
+    { id: 'p-1', text: 'Todo parece estar en su sitio. Hasta que un pequeño', x: 50, y: 286, fontSize: 14, fontFamily: 'sans-serif', color: '#73796f' },
+    { id: 'p-2', text: 'agujero revela un mundo completamente diferente.', x: 50, y: 309, fontSize: 14, fontFamily: 'sans-serif', color: '#73796f' },
+    { id: 'btn', text: 'Al otro lado   ↗', x: 68, y: 362, fontSize: 12, fontFamily: 'sans-serif', color: '#f3f1e9' },
+    { id: 'col-header', text: '01 / HAY ALGO AL OTRO LADO', x: 598, y: 364, fontSize: 10, fontFamily: 'monospace', color: '#6b776b' },
+    { id: 'col-quote', text: 'Lo extraordinario está bajo la superficie.', x: 598, y: 391, fontSize: 21, fontFamily: 'Georgia', color: '#2c3431' },
+    { id: 'footer-1', text: 'Un pequeño experimento sobre las cosas que damos por hechas.', x: 48, y: 454, fontSize: 11, fontFamily: 'sans-serif', color: '#82877b' },
+    { id: 'footer-2', text: 'EDICIÓN 001  ·  OCT 2026', x: 889, y: 454, fontSize: 10, fontFamily: 'monospace', color: '#82877b' },
+  ];
+}

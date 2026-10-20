@@ -12,6 +12,7 @@ describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
       createDebrisImage: vi.fn().mockReturnValue(mockImage),
       addDebrisPolygon: vi.fn(),
       addDebrisFrame: vi.fn(),
+      addLetterFrame: vi.fn(),
       removeDebrisFrame: vi.fn(),
     };
     return { mockHost, mockImage };
@@ -105,6 +106,44 @@ describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
     expect(() => {
       manager.applyBlastImpulse(500, 250, 50, 450);
     }).not.toThrow();
+
+    manager.destroy();
+  });
+
+  it('spawns dynamic letter debris with custom frame and physics properties', async () => {
+    const { mockHost } = createMockHost();
+    const manager = new DebrisManager(mockHost);
+    await manager.init();
+
+    manager.spawnLetterDebris(
+      {
+        id: 'c-1',
+        char: 'W',
+        x: 400,
+        y: 200,
+        width: 14,
+        height: 20,
+        fontSize: 20,
+        fontFamily: 'Georgia',
+        color: '#2c3431',
+      },
+      'letter-c-1',
+      -Math.PI / 3,
+      180
+    );
+
+    expect(manager.count).toBe(1);
+    expect(mockHost.addLetterFrame).toHaveBeenCalledWith(
+      'letter-c-1',
+      expect.objectContaining({ char: 'W', id: 'c-1' })
+    );
+    expect(mockHost.createDebrisImage).toHaveBeenCalledWith(407, 210, 'letter-c-1', 0.5, 0.5);
+
+    // Step physics
+    for (let i = 0; i < 15; i++) {
+      manager.update();
+    }
+    expect(manager.count).toBe(1);
 
     manager.destroy();
   });

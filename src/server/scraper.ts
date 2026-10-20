@@ -1,4 +1,5 @@
 import { chromium, type Browser } from '@playwright/test';
+import type { TextRunInput } from '../game/text/DOMTextManager';
 
 export interface ScrapedPlatform {
   id: string;
@@ -27,6 +28,7 @@ export interface ScrapedPageResult {
   height: number;     // 488
   platforms: ScrapedPlatform[];
   detachables: ScrapedDetachable[];
+  textRuns?: TextRunInput[];
 }
 
 export interface CandidateElement {
@@ -191,6 +193,15 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       { id: 'd4', x: 830, y: 310, width: 220, height: 110, tag: 'img' },
     ];
 
+    const textRuns: TextRunInput[] = [
+      { id: 'w-title', text: 'Wikipedia Enciclopedia Libre', x: 48, y: 55, fontSize: 24, fontFamily: 'Georgia', color: '#202122' },
+      { id: 'w-h2', text: 'Titular Destacado: Arquitectura', x: 48, y: 120, fontSize: 20, fontFamily: 'Georgia', color: '#202122' },
+      { id: 'w-p1', text: 'La arquitectura es el arte y la técnica de proyectar y construir.', x: 48, y: 180, fontSize: 14, fontFamily: 'sans-serif', color: '#54595d' },
+      { id: 'w-p2', text: 'Estructuras destinadas a satisfacer las necesidades humanas.', x: 48, y: 205, fontSize: 14, fontFamily: 'sans-serif', color: '#54595d' },
+      { id: 'w-btn', text: 'Leer en otro idioma', x: 60, y: 265, fontSize: 12, fontFamily: 'sans-serif', color: '#36414c' },
+      { id: 'w-h3', text: 'Sección Referencias y Enlaces', x: 48, y: 340, fontSize: 18, fontFamily: 'Georgia', color: '#202122' },
+    ];
+
     return {
       url: 'https://es.wikipedia.org/wiki/Especial:Aleatoria',
       title: 'Wikipedia, la enciclopedia libre',
@@ -199,6 +210,7 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       height: VIEWPORT_HEIGHT,
       platforms,
       detachables,
+      textRuns,
     };
   }
 
@@ -218,6 +230,13 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       { id: 'gd2', x: 760, y: 220, width: 290, height: 180, tag: 'aside' },
     ];
 
+    const textRuns: TextRunInput[] = [
+      { id: 'gh-repo', text: 'luisrodriguez / My-Destroy', x: 48, y: 52, fontSize: 22, fontFamily: 'sans-serif', color: '#0969da' },
+      { id: 'gh-nav', text: 'Code   Issues   Pull requests   Actions', x: 48, y: 110, fontSize: 13, fontFamily: 'sans-serif', color: '#656d76' },
+      { id: 'gh-banner', text: 'Latest release v0.1.0 · Physics & DOM Destruction', x: 60, y: 178, fontSize: 14, fontFamily: 'sans-serif', color: '#1f2328' },
+      { id: 'gh-about', text: 'About: Web destruction engine with Rapier2D physics', x: 760, y: 250, fontSize: 13, fontFamily: 'sans-serif', color: '#656d76' },
+    ];
+
     return {
       url: 'https://github.com/luisrodriguez-rgb/My-Destroy',
       title: 'luisrodriguez-rgb/My-Destroy · GitHub',
@@ -226,6 +245,7 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       height: VIEWPORT_HEIGHT,
       platforms,
       detachables,
+      textRuns,
     };
   }
 
@@ -356,7 +376,36 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
     const platforms = prunePlatforms(rawCandidates);
     const detachables = extractDetachables(rawCandidates);
 
-    // 3. Take crisp screenshot at exact 1104x488 viewport
+    // 3. Extract text runs for dynamic character splitting physics
+    const textRuns: TextRunInput[] = await page.evaluate(() => {
+      const selectors = 'h1, h2, h3, h4, p, a.btn, [role="button"], button';
+      const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
+      const runs: TextRunInput[] = [];
+      let count = 0;
+      for (const node of nodes) {
+        if (count >= 20) break;
+        const rect = node.getBoundingClientRect();
+        if (rect.width < 30 || rect.height < 10) continue;
+        if (rect.bottom > 488 || rect.top < 0 || rect.left < 0 || rect.right > 1104) continue;
+        const style = window.getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.1) continue;
+        const txt = (node.textContent || '').trim().replace(/\s+/g, ' ');
+        if (txt.length < 3) continue;
+
+        runs.push({
+          id: `run-${count++}`,
+          text: txt.slice(0, 80),
+          x: Math.round(rect.left),
+          y: Math.round(rect.top + rect.height * 0.75),
+          fontSize: Math.round(parseFloat(style.fontSize) || 16),
+          fontFamily: style.fontFamily || 'sans-serif',
+          color: style.color || '#202122',
+        });
+      }
+      return runs;
+    });
+
+    // 4. Take crisp screenshot at exact 1104x488 viewport
     const buffer = await page.screenshot({
       type: 'png',
       clip: { x: 0, y: 0, width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
@@ -373,6 +422,7 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
       height: VIEWPORT_HEIGHT,
       platforms,
       detachables,
+      textRuns,
     };
   } catch (err) {
     // If external network fails or times out, gracefully fall back to Wikipedia preset

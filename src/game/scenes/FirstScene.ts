@@ -6,11 +6,12 @@ import type { Preferences, SceneCallbacks, WeaponId } from '../bridge';
 import { screenToWorld } from '../coordinates';
 import { PlatformController } from '../physics/PlatformController';
 import { getDemoPlatforms, type Platform } from '../platforms/demoPlatforms';
-import { drawDemoPage } from '../fixtures/demoPage';
+import { drawDemoPage, getDemoTextRuns } from '../fixtures/demoPage';
 import type { ScrapedPageResult } from '../../server/scraper';
 import { WEAPONS, WEAPON_ORDER, calculateSpreadAngles } from '../weapons/weapons';
 import type { WeaponConfig } from '../weapons/types';
 import { DebrisManager } from '../physics/DebrisManager';
+import { DOMTextManager } from '../text/DOMTextManager';
 
 type Fragment = { image: Phaser.GameObjects.Image; vx: number; vy: number; spin: number; life: number; duration: number; frame: string };
 type Dust = { x: number; y: number; vx: number; vy: number; life: number; duration: number; size: number; color: number };
@@ -32,6 +33,7 @@ export class FirstScene extends Phaser.Scene {
   private surface!: DestructiblePage;
   private controller!: PlatformController;
   private debrisManager!: DebrisManager;
+  private domTextManager: DOMTextManager = new DOMTextManager(getDemoTextRuns());
   private detachables: ActiveDetachable[] = [];
   private initialDetachables: ActiveDetachable[] = [];
   private currentPlatforms: Platform[] = getDemoPlatforms();
@@ -115,6 +117,21 @@ export class FirstScene extends Phaser.Scene {
       },
       addDebrisFrame: (frameKey, x, y, w, h) => {
         this.surface.source.add(frameKey, 0, x, y, w, h);
+      },
+      addLetterFrame: (frameKey, charData) => {
+        const pad = 2;
+        const w = charData.width + pad * 2;
+        const h = charData.height + pad * 2;
+        const tex = this.textures.createCanvas(frameKey, w, h);
+        if (tex) {
+          const ctx = tex.context;
+          ctx.clearRect(0, 0, w, h);
+          ctx.font = `${charData.fontSize}px ${charData.fontFamily}`;
+          ctx.fillStyle = charData.color;
+          ctx.textBaseline = 'top';
+          ctx.fillText(charData.char, pad, pad);
+          tex.refresh();
+        }
       },
       removeDebrisFrame: (frameKey) => {
         const tex = this.textures.get(frameKey);
@@ -402,6 +419,7 @@ export class FirstScene extends Phaser.Scene {
           if (result.removed.length) {
             this.emitImpact(tx, ty, pAngle, weapon.radius, 4);
             this.debrisManager?.applyBlastImpulse(tx, ty, weapon.radius * 1.2, 140);
+            this.checkTextSplits(tx, ty, weapon.radius);
           }
         }
       });
@@ -429,6 +447,7 @@ export class FirstScene extends Phaser.Scene {
         this.debrisManager?.applyBlastImpulse(this.aim.x, this.aim.y, weapon.radius * 1.3, 160);
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
         this.checkDetachables();
+        this.checkTextSplits(this.aim.x, this.aim.y, weapon.radius);
       }
     }
     this.audio.shot(hit);
@@ -573,6 +592,34 @@ export class FirstScene extends Phaser.Scene {
     this.emitImpact(d.worldX + d.width / 2, d.worldY + d.height / 2, -Math.PI / 2, Math.min(d.width, d.height) * 0.4, 6);
   }
 
+  private checkTextSplits(blastX: number, blastY: number, radius: number): void {
+    if (!this.domTextManager || !this.debrisManager) return;
+    const detached = this.domTextManager.splitOnImpact(blastX, blastY, radius, 14);
+    for (const item of detached) {
+      const ch = item.char;
+      // Clear character area on paper so no ghost character remains
+      this.surface.clearArea(ch.paperX, ch.paperY, ch.width, ch.height);
+
+      const frameKey = `text-${ch.id}-${this.serial++}`;
+      this.debrisManager.spawnLetterDebris(
+        {
+          id: ch.id,
+          char: ch.char,
+          x: ch.worldX,
+          y: ch.worldY,
+          width: ch.width,
+          height: ch.height,
+          fontSize: ch.fontSize,
+          fontFamily: ch.fontFamily,
+          color: ch.color,
+        },
+        frameKey,
+        item.radialAngle,
+        180
+      );
+    }
+  }
+
   async loadCustomPage(data: ScrapedPageResult): Promise<void> {
     let sourceElement: HTMLCanvasElement | HTMLImageElement;
 
@@ -645,7 +692,14 @@ export class FirstScene extends Phaser.Scene {
     this.initialDetachables = [...mappedDetachables];
     this.detachables = [...mappedDetachables];
 
-    // 4. Place player safely on catwalk
+    // 4. Setup text runs for character splitting physics
+    if (data.textRuns && data.textRuns.length > 0) {
+      this.domTextManager.loadRuns(data.textRuns);
+    } else {
+      this.domTextManager.loadRuns([]);
+    }
+
+    // 5. Place player safely on catwalk
     this.controller.reset(350, WORLD.floor - 4);
     this.notify();
   }
@@ -668,6 +722,7 @@ export class FirstScene extends Phaser.Scene {
     this.debrisManager?.setPlatforms(demoPlatforms);
 
     this.initDemoDetachables();
+    this.domTextManager.loadRuns(getDemoTextRuns());
     this.controller.reset(350, WORLD.floor - 4);
     this.notify();
   }
@@ -676,6 +731,7 @@ export class FirstScene extends Phaser.Scene {
     this.clearEffects(); this.audio.stop(); this.surface.reset(); this.keys.clear();
     this.shots = 0; this.hits = 0; this.shotTime = -1000;
     this.detachables = [...this.initialDetachables];
+    this.domTextManager?.reset();
     this.controller.reset(350, WORLD.floor - 4);
     this.phase = 0; this.paused = false; this.resets++; this.notify();
   }
@@ -688,6 +744,8 @@ export class FirstScene extends Phaser.Scene {
       removed: this.surface?.mask.removedCount,
       fragments: this.fragments.length,
       debris: this.debrisManager ? this.debrisManager.count : 0,
+      textRemaining: this.domTextManager ? this.domTextManager.remainingChars : 0,
+      textDetached: this.domTextManager ? this.domTextManager.detachedChars : 0,
       detachables: this.detachables.length,
       platforms: this.currentPlatforms.length,
       objects: this.children.length + (this.debrisLayer ? this.debrisLayer.length : 0),
@@ -849,6 +907,7 @@ export class FirstScene extends Phaser.Scene {
         this.debrisManager?.applyBlastImpulse(g.x, g.y, g.blastRadius, 520);
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
         this.checkDetachables();
+        this.checkTextSplits(g.x, g.y, g.blastRadius);
         this.audio.explosion();
         if (!this.prefs.reducedMotion) {
           this.cameras.main.shake(120, 0.007);
