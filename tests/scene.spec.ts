@@ -232,8 +232,8 @@ test('DOM text splitting: impact over headings and paragraphs detaches individua
   expect(afterFirstShot.textRemaining).toBeLessThan(initial.textRemaining);
   expect(afterFirstShot.debris).toBeGreaterThan(0);
 
-  // Fire into the second line 'hecho pedazos.' located at worldX ~140, worldY ~270
-  await fire(page, 140, 270);
+  // Fire into the second line 'pedazos' located at worldX ~220, worldY ~255
+  await fire(page, 220, 255);
   await page.waitForTimeout(250);
 
   const afterSecondShot = await snapshot(page);
