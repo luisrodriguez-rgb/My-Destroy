@@ -62,7 +62,7 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
 
 ### D. Físicas Rígidas y Fractura Poligonal (`src/game/physics/`)
 - **`DebrisManager.ts`**:
-  - Genera fractura geométrica usando `delaunator` para dividir el área demolida en múltiples triángulos texturizados recortados de la página original.
+  - Genera fractura geométrica variada: triángulos texturizados afilados (`delaunator`), polígonos cuadriláteros irregulares y esquirlas alargadas de papel rasgado (*splinters*).
   - Simula los escombros mediante el motor de física de cuerpos rígidos `@dimforge/rapier2d-compat` (WASM).
   - Cada fragmento posee un colisionador de triángulo (`RAPIER.ColliderDesc.triangle`) o cuboid, restituyendo rebotes elásticos y fricción real.
   - Los trozos colisionan contra el suelo de la pasarela y las 7 plataformas geométricas, **acumulándose en pilas físicas persistentes** a los pies del jugador.
@@ -71,16 +71,17 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
   - Implementa un modelo cinemático determinista para el operario (sin depender de simulaciones pesadas de físicas como Arcade o Matter).
   - Consulta las 7 plataformas geométricas definidas en `demoPlatforms.ts` (tarjetas, botones, barras de la página) y el suelo indestructible de la pasarela (`y = 530`).
   - **Detección de soporte destructible**: en cada fotograma, muestrea la solidez de la plataforma en los pies del jugador (`PlatformController.isFootingSolid()`). Si un disparo abre un agujero en ese punto, el soporte se cancela de inmediato y el jugador cae por aceleración de gravedad.
+  - **Jetpack Propulsor Integrado**: al mantener presionado <kbd>W</kbd>, <kbd>Espacio</kbd> o <kbd>ArrowUp</kbd> en el aire, se activa la propulsión vertical continua (`jetpackThrust: 1720 px/s²`) permitiendo al jugador volar, flotar y ascender libremente por toda la pantalla hasta alcanzar los títulos superiores de la página. Renderiza llamaradas dinámicas de plasma y chispas procedimentales desde la mochila del operario.
   - Gestiona salto elástico, caída voluntaria (*drop*) con <kbd>S</kbd>, *coyote time* (100 ms) y *jump buffer* (120 ms).
 
 ### E. Sistema de Armas (`src/game/weapons/`)
 - Arquitectura basada en datos:
   - `WeaponConfig`: define identificador (`WeaponId`), nombre, categoría, cadencia (*cooldown*), destello, retroceso, radio de daño y comportamiento de proyectiles.
-  - **Slot 01: Pistola (`pistol`)**: disparo semiautomático puntual con radio de daño de 28 px y cadencia de 220 ms.
-  - **Slot 02: Escopeta (`shotgun`)**: calcula abanico simétrico (`calculateSpreadAngles()`) y dispara 5 perdigones simultáneos con desvío aleatorio menor y perforaciones de 16 px (cadencia de 650 ms).
-  - **Slot 03: Lanzagranadas (`grenade`)**: proyectiles con velocidad vectorial, gravedad y colisión elástica (rebotando contra plataformas y suelo con coeficiente de restitución), que al detonar por tiempo (1.2 s) o impacto en vacío ejecutan un cráter de 54 px con sacudida de pantalla.
-  - **Slot 04: Láser Térmico Continuo (`laser`)**: disparo continuo de alta frecuencia (cadencia de 42 ms) mientras se mantiene presionado el puntero. Traza un haz térmico multicapa con resplandor exterior naranja (`#ff4d0044`), núcleo medio ámbar y filamento central incandescente blanco (`#ffffff`), proyectando chispas y esculpiendo cortes rectilíneos de 12 px con retroceso micro-amortiguado (1.2 px).
-  - **Slot 05: Singularidad Gravitatoria (`vortex`)**: proyectil de antimateria lanzado balísticamente que desacelera en el aire ($v \times 0.96$) y forma un vórtice gravitacional activo. Ejerce atracción radial centrípeta y torbellino tangencial (`applyVortexPull`) sobre escombros y letras en un radio de 320 px, desintegra la materia que cruza el horizonte de sucesos ($r < 14\text{ px}$) y culmina en un colapso e implosión cósmica a los 1.6 s con un cráter de 76 px y una onda de choque expansiva de 620 N.
+  - **Slot 01: Pistola (`pistol`)**: disparo semiautomático puntual y quirúrgico con radio de daño reducido a 13 px (cadencia 180 ms), permitiendo agujerear letras individuales sin destruir párrafos enteros.
+  - **Slot 02: Escopeta (`shotgun`)**: dispara 5 perdigones en abanico simétrico (`spreadDeg: 14°`) con radio fino de 8 px por perdigón, abriendo múltiples orificios balísticos independientes en lugar de un único borrón masivo.
+  - **Slot 03: Lanzagranadas (`grenade`)**: proyectil táctico pixel-art en rotación (cuerpo verde oliva segmentado, palanca plateada, anilla dorada y mecha con chispas y estela de humo). Rebalanceado a un radio de 38 px para un cráter proporcionado y destructivo.
+  - **Slot 04: Láser Térmico Continuo (`laser`)**: haz continuo a 35 ms con interpolación geométrica continua a lo largo del trazo del cursor, esculpiendo surcos lisos y uniformes de 8 px sin saltos discretos. Haz multicapa con resplandor naranja, núcleo ámbar y filamento central blanco incandescente.
+  - **Slot 05: Singularidad Gravitatoria (`vortex`)**: anomalía cósmica viva con horizonte de sucesos oscuro, anillo fotónico blanco/cian, 4 brazos espirales logarítmicos giratorios y filamentos de succión centrípeta. Atrae (`applyVortexPull`) escombros y letras en un radio de 220 px, desintegra la materia en su centro y culmina en una contracción súbita seguida de supernova cósmica (radio 56 px, 620 N).
 
 ### F. Síntesis Sonora Procedural (`src/game/audio/ShotAudio.ts`)
 - Utiliza la Web Audio API estándar del navegador para sintetizar sonido dinámico sin dependencias de red ni ficheros de audio estáticos.
@@ -90,11 +91,12 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
   - Retumbe de baja frecuencia con filtro paso-bajo en la detonación.
   - **Pulso de láser térmico (`laserPulse`)**: síntesis híbrida de diente de sierra con filtro paso-alto y paso-banda saturado para lograr el chisporroteo eléctrico e incandescencia.
   - **Singularidad cósmica**: silbido ascendente gravitacional (`vortexLaunch`), pulso resonante sub-grave del disco de acreción (`vortexHum`) y colapso de vacío con caída exponencial e impacto explosivo (`vortexImplosion`).
+  - **Hiss de Jetpack (`jetpackHiss`)**: modulación de ruido blanco con filtro paso-banda aéreo que acompaña el ascenso del operario.
 
 ### G. Deconstrucción y Fractura de Texto DOM (`src/game/text/DOMTextManager.ts`)
 - Mapea líneas tipográficas (`TextRunInput`) en cajas envolventes con anchos métricos proporcionales para cada glifo visible.
-- **Desprendimiento físico por impacto (`splitOnImpact`)**: al impactar cualquier arma (pistola, escopeta, granada, láser o colapso de singularidad), calcula qué letras caen dentro del radio de la onda expansiva.
+- **Desprendimiento físico por impacto (`splitOnImpact`)**: calcula la intersección entre el círculo de impacto y la caja delimitadora (*bounding box*) de cada glifo, asegurando que cualquier disparo que roce una letra (sin importar su tamaño o escala) la desprenda limpiamente.
 - **Borrado de la superficie (`surface.clearArea`)**: elimina la silueta del carácter en la textura de papel para evitar glifos fantasma duplicados, descubriendo el sustrato digital interactivo.
 - **Cuerpos rígidos dinámicos en Rapier2D (`spawnLetterDebris`)**: proyecta las letras con impulso radial, elevación y torque de rotación con colisionadores cuboid y detección continua de colisiones (CCD), posándose y rebotando sobre pasarelas y plataformas.
-- **Interacción gravitacional**: las letras libres responden a `applyVortexPull()`, orbitando hacia el centro del vórtice antes de su desintegración.
+- **Interacción gravitacional**: las letras libres responden a `applyVortexPull()`, orbitando en espiral hacia el centro del vórtice antes de su desintegración.
 
