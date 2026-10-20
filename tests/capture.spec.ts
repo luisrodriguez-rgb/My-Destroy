@@ -116,3 +116,44 @@ test('captures real scraped Wikipedia destruction with dynamic platforms and fal
   await page.screenshot({ path: 'docs/previews/scraped-wikipedia-destroyed.png', fullPage: true });
 });
 
+test('captures DOM text splitting with tumbling letter physics', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await expect(page.locator('canvas')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Reiniciar' })).toBeEnabled();
+  await page.locator('canvas').focus();
+
+  async function fire(x: number, y: number) {
+    const box = (await page.locator('canvas').boundingBox())!;
+    await page.mouse.click(box.x + (x / 1152) * box.width, box.y + (y / 584) * box.height);
+  }
+
+  // Shoot into the large headline "Internet, hecho pedazos."
+  for (const [x, y] of [[110, 195], [170, 195], [230, 195]]) {
+    await fire(x, y);
+    await page.waitForTimeout(220);
+  }
+
+  // Shoot into 'hecho pedazos.'
+  for (const [x, y] of [[120, 260], [180, 260], [250, 260]]) {
+    await fire(x, y);
+    await page.waitForTimeout(220);
+  }
+
+  // Shoot into paragraph text
+  for (const [x, y] of [[120, 300], [220, 315]]) {
+    await fire(x, y);
+    await page.waitForTimeout(220);
+  }
+
+  // Allow letters and debris to tumble and settle with Rapier2D physics
+  await page.waitForTimeout(1600);
+
+  const state = await page.evaluate(() => (window as any).__MY_DESTROY__.snapshot());
+  expect(state.textDetached).toBeGreaterThan(10);
+
+  await mkdir('docs/previews', { recursive: true });
+  await page.screenshot({ path: 'docs/previews/dom-text-splitting.png', fullPage: true });
+});
+
+
