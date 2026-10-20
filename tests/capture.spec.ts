@@ -156,4 +156,57 @@ test('captures DOM text splitting with tumbling letter physics', async ({ page }
   await page.screenshot({ path: 'docs/previews/dom-text-splitting.png', fullPage: true });
 });
 
+test('captures extended arsenal with laser beam and gravitational vortex', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await expect(page.locator('canvas')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Reiniciar' })).toBeEnabled();
+  await page.locator('canvas').focus();
+
+  const box = (await page.locator('canvas').boundingBox())!;
+
+  // 1. Switch to Slot 4: Láser Térmico Continuo
+  await page.keyboard.press('Digit4');
+  await page.waitForTimeout(100);
+
+  // Carve continuous thermal line through headline & paragraph
+  await page.mouse.move(box.x + (100 / 1152) * box.width, box.y + (200 / 584) * box.height);
+  await page.mouse.down();
+  for (let px = 100; px <= 380; px += 20) {
+    await page.mouse.move(box.x + (px / 1152) * box.width, box.y + (205 / 584) * box.height);
+    await page.waitForTimeout(30);
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+
+  // Carve second slice through paragraph
+  await page.mouse.move(box.x + (100 / 1152) * box.width, box.y + (290 / 584) * box.height);
+  await page.mouse.down();
+  for (let px = 100; px <= 360; px += 25) {
+    await page.mouse.move(box.x + (px / 1152) * box.width, box.y + (295 / 584) * box.height);
+    await page.waitForTimeout(30);
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+
+  // 2. Switch to Slot 5: Singularidad Gravitatoria
+  await page.keyboard.press('Digit5');
+  await page.waitForTimeout(100);
+
+  // Launch gravitational vortex into the right column
+  await page.mouse.click(box.x + (750 / 1152) * box.width, box.y + (280 / 584) * box.height);
+
+  // Wait 700ms so the vortex is fully active, swirling accretion rings, pulling debris and letters
+  await page.waitForTimeout(700);
+
+  await mkdir('docs/previews', { recursive: true });
+  await page.screenshot({ path: 'docs/previews/extended-arsenal.png', fullPage: true });
+
+  // Wait for the catastrophic implosion to finish
+  await page.waitForTimeout(1500);
+
+  const state = await page.evaluate(() => (window as any).__MY_DESTROY__.snapshot());
+  expect(state.percent).toBeGreaterThan(1);
+});
+
 

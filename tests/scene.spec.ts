@@ -147,6 +147,34 @@ test('weapon arsenal switches via hotkeys/UI and supports shotgun spread and gre
   const postBlast = await snapshot(page);
   expect(postBlast.removed).toBeGreaterThan(initialRemoved);
 
+  // Switch to laser using hotkey '4'
+  await page.locator('canvas').focus();
+  await page.keyboard.press('Digit4');
+  state = await snapshot(page);
+  expect(state.weapon).toBe('laser');
+  await expect(page.locator('.weapon-slot[data-active="true"]')).toContainText('Láser');
+
+  // Continuous laser fire via holding mouse down
+  const preLaserShots = (await snapshot(page)).shots;
+  const box = (await page.locator('canvas').boundingBox())!;
+  await page.mouse.move(box.x + (500 / 1152) * box.width, box.y + (280 / 584) * box.height);
+  await page.mouse.down();
+  await page.waitForTimeout(300);
+  await page.mouse.up();
+  await expect.poll(async () => (await snapshot(page)).shots).toBeGreaterThan(preLaserShots + 2);
+
+  // Switch to vortex using UI button
+  await page.locator('.weapon-slot', { hasText: 'Vórtice' }).click();
+  state = await snapshot(page);
+  expect(state.weapon).toBe('vortex');
+
+  // Fire gravitational vortex into demo area
+  const preVortexRemoved = (await snapshot(page)).removed;
+  await fire(page, 450, 260);
+  await page.waitForTimeout(2000); // 1.6s fuse + implosion blast
+  const postVortex = await snapshot(page);
+  expect(postVortex.removed).toBeGreaterThan(preVortexRemoved);
+
   // Switch back to pistol using hotkey '1'
   await page.locator('canvas').focus();
   await page.keyboard.press('Digit1');
