@@ -59,3 +59,60 @@ test('captures high-res live screenshot with triangular debris, underlayer, and 
   await mkdir('docs/previews', { recursive: true });
   await page.screenshot({ path: 'docs/previews/debris-dither-live.png', fullPage: true });
 });
+
+test('captures real scraped Wikipedia destruction with dynamic platforms and falling detachable', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await expect(page.locator('canvas')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Reiniciar' })).toBeEnabled();
+
+  // 1. Click Wikipedia preset
+  await page.getByRole('button', { name: 'Wikipedia' }).click();
+  await expect(page.getByRole('button', { name: 'Volver a demo' })).toBeVisible({ timeout: 15000 });
+  await page.waitForTimeout(600);
+
+  async function fire(x: number, y: number) {
+    const box = (await page.locator('canvas').boundingBox())!;
+    await page.mouse.click(box.x + (x / 1152) * box.width, box.y + (y / 584) * box.height);
+  }
+
+  // 2. Precision pistol shots on the main title and right summary card
+  for (const [x, y] of [[200, 75], [260, 75], [750, 150], [820, 160]]) {
+    await fire(x, y);
+    await page.waitForTimeout(220);
+  }
+
+  // 3. Switch to Shotgun ('2') for blast across the image gallery and middle section
+  await page.keyboard.press('Digit2');
+  await page.waitForTimeout(100);
+
+  for (const [x, y] of [[650, 350], [720, 360], [800, 350]]) {
+    await fire(x, y);
+    await page.waitForTimeout(420);
+  }
+
+  // 4. Detach button/card: target corners of detachable button at x=48+24=72, y=245+22=267
+  await page.keyboard.press('Digit1');
+  await page.waitForTimeout(100);
+  await fire(80, 275);
+  await page.waitForTimeout(220);
+  await fire(260, 275);
+  await page.waitForTimeout(220);
+
+  // 5. Grenade launcher ('3') for cratering
+  await page.keyboard.press('Digit3');
+  await page.waitForTimeout(100);
+  await fire(750, 340);
+  await page.waitForTimeout(1000);
+
+  // Allow Rapier2D physics to settle debris pieces
+  await page.waitForTimeout(1500);
+
+  const state = await page.evaluate(() => (window as any).__MY_DESTROY__.snapshot());
+  expect(state.shots).toBeGreaterThan(0);
+  expect(state.percent).toBeGreaterThan(0.5);
+
+  await mkdir('docs/previews', { recursive: true });
+  await page.screenshot({ path: 'docs/previews/scraped-wikipedia-destroyed.png', fullPage: true });
+});
+
