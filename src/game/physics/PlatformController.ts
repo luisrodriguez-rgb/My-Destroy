@@ -21,6 +21,7 @@ export class PlatformController {
   vx = 0;
   vy = 0;
   onGround = true;
+  isJetpacking = false;
   currentPlatformId: string | null = 'catwalk';
 
   private coyoteTimer = 0;
@@ -37,6 +38,7 @@ export class PlatformController {
     this.vx = 0;
     this.vy = 0;
     this.onGround = true;
+    this.isJetpacking = false;
     this.currentPlatformId = 'catwalk';
     this.coyoteTimer = 0;
     this.jumpBufferTimer = 0;
@@ -117,11 +119,24 @@ export class PlatformController {
       }
     }
 
-    // 6. In-air physics and landing resolution
+    // 6. In-air physics, Jetpack thrust and landing resolution
     if (!this.onGround) {
-      this.vy = Math.min(this.vy + gravity * dt, maxFallSpeed);
+      if (jump && !drop) {
+        this.isJetpacking = true;
+        this.vy = Math.max(PLAYER_PHYSICS.maxClimbSpeed, this.vy + (gravity - PLAYER_PHYSICS.jetpackThrust) * dt);
+      } else {
+        this.isJetpacking = false;
+        this.vy = Math.min(this.vy + gravity * dt, maxFallSpeed);
+      }
+
       const prevY = this.y;
       this.y += this.vy * dt;
+
+      // Top ceiling clamp so player doesn't fly out of the canvas
+      if (this.y < PLAYER_PHYSICS.minY) {
+        this.y = PLAYER_PHYSICS.minY;
+        if (this.vy < 0) this.vy = 0;
+      }
 
       // Landing detection only when falling downwards
       if (this.vy >= 0) {
@@ -130,6 +145,7 @@ export class PlatformController {
           this.y = this.options.floorY;
           this.vy = 0;
           this.onGround = true;
+          this.isJetpacking = false;
           this.currentPlatformId = 'catwalk';
         } else if (!drop) {
           // Check destructible platforms, sorted from highest to lowest in collision path
@@ -147,6 +163,7 @@ export class PlatformController {
                 this.y = platform.y;
                 this.vy = 0;
                 this.onGround = true;
+                this.isJetpacking = false;
                 this.currentPlatformId = platform.id;
                 break;
               }
@@ -155,6 +172,8 @@ export class PlatformController {
           }
         }
       }
+    } else {
+      this.isJetpacking = false;
     }
   }
 

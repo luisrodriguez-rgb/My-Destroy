@@ -313,7 +313,7 @@ export function App() {
         </div>
         <div className="shortcuts">
           <span><kbd>A</kbd><kbd>D</kbd> Mover</span>
-          <span><kbd>W</kbd> Saltar</span>
+          <span><kbd>W</kbd> Jetpack</span>
           <span><kbd>S</kbd> Bajar</span>
           <span><kbd>1</kbd>–<kbd>5</kbd> / Rueda</span>
           <span><Icon name="cross" /> Disparar</span>

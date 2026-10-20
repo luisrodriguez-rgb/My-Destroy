@@ -11,5 +11,8 @@ export const PLAYER_PHYSICS = {
   maxFallSpeed: 580,
   coyoteTime: 100,
   jumpBufferTime: 120,
+  jetpackThrust: 1720,
+  maxClimbSpeed: -320,
+  minY: 64,
 };
 

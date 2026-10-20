@@ -41,6 +41,7 @@ export class FirstScene extends Phaser.Scene {
   private actor!: Phaser.GameObjects.Container;
   private arm!: Phaser.GameObjects.Graphics;
   private feet!: Phaser.GameObjects.Graphics;
+  private jetpackFlames!: Phaser.GameObjects.Graphics;
   private effects!: Phaser.GameObjects.Graphics;
   private reticle!: Phaser.GameObjects.Graphics;
   private shadow!: Phaser.GameObjects.Ellipse;
@@ -353,6 +354,13 @@ export class FirstScene extends Phaser.Scene {
   private buildPlayer() {
     this.shadow = this.add.ellipse(this.controller.x, WORLD.floor - 2, 46, 8, 0x000000, 0.42).setDepth(19);
     const body = this.add.graphics();
+    // High-tech Jetpack backpack on player's back
+    body.fillStyle(0x192834).fillRect(-21, -38, 9, 21); // Dark chassis
+    body.fillStyle(0x283e50).fillRect(-22, -36, 3, 17); // Outer plating
+    body.fillStyle(0x00f5d4).fillRect(-20, -32, 2, 9);  // Cyan fuel gauge
+    body.fillStyle(0x141f28).fillRect(-21, -17, 7, 5);  // Dual thruster nozzle block
+    body.fillStyle(0x364d5e).fillRect(-20, -13, 2, 3).fillRect(-16, -13, 2, 3); // Metal exhaust bells
+
     body.fillStyle(0x101b24).fillRect(-15, -47, 30, 46);
     body.fillStyle(0x956735).fillRect(-17, -29, 8, 22);
     body.fillStyle(COLORS.amber).fillRect(-11, -44, 23, 18).fillRect(-9, -24, 19, 15);
@@ -361,7 +369,8 @@ export class FirstScene extends Phaser.Scene {
     body.fillStyle(COLORS.cyan).fillRect(2, -38, 11, 4);
     body.fillStyle(0x805e37).fillRect(-8, -26, 17, 3);
     this.feet = this.add.graphics();
-    this.actor = this.add.container(this.controller.x, this.controller.y, [body, this.feet]).setDepth(30);
+    this.jetpackFlames = this.add.graphics();
+    this.actor = this.add.container(this.controller.x, this.controller.y, [this.jetpackFlames, body, this.feet]).setDepth(30);
     this.arm = this.add.graphics().setDepth(31);
   }
 
@@ -810,6 +819,7 @@ export class FirstScene extends Phaser.Scene {
       playerY: this.controller ? this.controller.y : WORLD.floor - 4,
       playerVy: this.controller ? this.controller.vy : 0,
       onGround: this.controller ? this.controller.onGround : true,
+      isJetpacking: this.controller ? this.controller.isJetpacking : false,
       platform: this.controller ? this.controller.currentPlatformId : 'catwalk',
       weapon: this.currentWeaponId,
       grenades: this.grenades.length,
@@ -835,6 +845,40 @@ export class FirstScene extends Phaser.Scene {
       this.phase += Math.abs(movement) * dt * 16;
     }
     this.actor.setPosition(this.controller.x, this.controller.y);
+
+    // Dynamic Jetpack Thruster Flames
+    this.jetpackFlames.clear();
+    if (this.controller.isJetpacking && !this.prefs.reducedMotion) {
+      const pulse = Math.sin(this.time.now * 0.05);
+      const flameLen = 14 + pulse * 5;
+      const nozzleX = -18;
+      const nozzleY = -11;
+
+      // 1. Fiery red-orange outer thruster plume
+      this.jetpackFlames.fillStyle(0xff4500, 0.85);
+      this.jetpackFlames.fillTriangle(
+        nozzleX - 4, nozzleY,
+        nozzleX + 4, nozzleY,
+        nozzleX, nozzleY + flameLen
+      );
+
+      // 2. Incandescent amber-yellow core
+      this.jetpackFlames.fillStyle(0xffea78, 0.95);
+      this.jetpackFlames.fillTriangle(
+        nozzleX - 2.5, nozzleY,
+        nozzleX + 2.5, nozzleY,
+        nozzleX, nozzleY + flameLen * 0.65
+      );
+
+      // 3. Ultra-hot white plasma nozzle injection
+      this.jetpackFlames.fillStyle(0xffffff, 1);
+      this.jetpackFlames.fillRect(nozzleX - 1.5, nozzleY - 1, 3, 3);
+
+      // Procedural audio hiss while ascending
+      if (Math.random() < 0.2) {
+        this.audio.jetpackHiss();
+      }
+    }
 
     // Dynamic shadow projected on ground or platform below
     const ground = this.controller.findGroundBelow();

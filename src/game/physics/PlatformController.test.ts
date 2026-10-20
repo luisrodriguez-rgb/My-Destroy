@@ -205,4 +205,38 @@ describe('PlatformController', () => {
     expect(ground.y).toBe(350);
     expect(ground.platformId).toBe('new-dynamic-plat');
   });
+
+  it('engages jetpack thrust when holding jump in mid-air to fly upward and clamps at ceiling', () => {
+    const controller = new PlatformController({
+      floorY: 530,
+      worldBounds: { minX: 48, maxX: 1104 },
+      platforms: [],
+      isSolid: () => true,
+    }, 350, 530);
+
+    // Initial jump from floor
+    controller.update({ moveX: 0, jump: true, drop: false, dt: 0.016 });
+    expect(controller.onGround).toBe(false);
+
+    // Continue holding jump in mid-air -> triggers jetpack
+    controller.update({ moveX: 0, jump: true, drop: false, dt: 0.05 });
+    expect(controller.isJetpacking).toBe(true);
+    expect(controller.vy).toBeLessThan(0);
+
+    // Fly continuously upward
+    for (let i = 0; i < 40; i++) {
+      controller.update({ moveX: 0, jump: true, drop: false, dt: 0.05 });
+    }
+
+    // Climbs all the way up and clamps cleanly at minY (64)
+    expect(controller.y).toBe(64);
+    expect(controller.vy).toBe(0);
+    expect(controller.isJetpacking).toBe(true);
+
+    // Release jump -> stops jetpack and falls
+    controller.update({ moveX: 0, jump: false, drop: false, dt: 0.05 });
+    expect(controller.isJetpacking).toBe(false);
+    expect(controller.vy).toBeGreaterThan(0);
+  });
 });
+
