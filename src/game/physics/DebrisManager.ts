@@ -16,9 +16,10 @@ export interface DebrisPolygonData {
   cropY: number;
   width: number;
   height: number;
-  v0: { x: number; y: number };
-  v1: { x: number; y: number };
-  v2: { x: number; y: number };
+  v0?: { x: number; y: number };
+  v1?: { x: number; y: number };
+  v2?: { x: number; y: number };
+  vertices?: Array<{ x: number; y: number }>;
 }
 
 export interface LetterDebrisData {
@@ -439,6 +440,7 @@ export class DebrisManager {
           v0,
           v1,
           v2,
+          vertices: [v0, v1, v2],
         });
       } else if (this.host.addDebrisFrame) {
         this.host.addDebrisFrame(frameKey, frameCropX, frameCropY, w, h);
@@ -501,6 +503,60 @@ export class DebrisManager {
         frameKey,
         createdTime: Date.now(),
       });
+    }
+
+    // Spawn varied paper tear splinters (elongated strips)
+    const splinterCount = Math.min(2, Math.max(1, Math.floor(targetCount / 3)));
+    for (let s = 0; s < splinterCount; s++) {
+      if (this.activeDebris.length >= this.maxDebris) this.removeDebris(0);
+      const sAngle = blastAngle + (Math.random() - 0.5) * 1.6;
+      const sDist = radius * (0.45 + Math.random() * 0.45);
+      const sx = x + Math.cos(sAngle) * sDist;
+      const sy = y + Math.sin(sAngle) * sDist;
+      const paperX = sx - PAPER.x;
+      const paperY = sy - PAPER.y;
+      if (paperX < 0 || paperX >= PAPER.width - 24 || paperY < 0 || paperY >= PAPER.height - 24) continue;
+
+      const sw = Math.round(5 + Math.random() * 4); // 5-9px narrow strip
+      const sh = Math.round(16 + Math.random() * 16); // 16-32px elongated strip
+      const cropX = clamp(Math.round(paperX), 0, PAPER.width - sw);
+      const cropY = clamp(Math.round(paperY), 0, PAPER.height - sh);
+
+      const frameKey = `splinter-${this.serial++}`;
+      if (this.host.addDebrisPolygon) {
+        const skew = (Math.random() - 0.5) * 4;
+        this.host.addDebrisPolygon({
+          frameKey,
+          cropX,
+          cropY,
+          width: sw,
+          height: sh,
+          vertices: [
+            { x: Math.max(0, skew), y: 0 },
+            { x: sw, y: Math.max(0, -skew) },
+            { x: Math.max(0, sw - skew), y: sh },
+            { x: 0, y: Math.max(0, sh + skew) },
+          ],
+        });
+      } else if (this.host.addDebrisFrame) {
+        this.host.addDebrisFrame(frameKey, cropX, cropY, sw, sh);
+      }
+
+      const visual = this.host.createDebrisImage(sx, sy, frameKey, 0.5, 0.5);
+      const bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(sx, sy).setCcdEnabled(true);
+      const body = this.world.createRigidBody(bodyDesc);
+      const colDesc = RAPIER.ColliderDesc.cuboid(sw / 2, sh / 2);
+      colDesc.setRestitution(0.3);
+      colDesc.setFriction(0.7);
+      this.world.createCollider(colDesc, body);
+
+      const speed = impulseForce * (0.8 + Math.random() * 0.5);
+      const vx = Math.cos(sAngle) * speed;
+      const vy = Math.sin(sAngle) * speed - (100 + Math.random() * 120);
+      body.setLinvel({ x: vx, y: vy }, true);
+      body.setAngvel((Math.random() - 0.5) * 20, true);
+
+      this.activeDebris.push({ visual, body, frameKey, createdTime: Date.now() });
     }
   }
 

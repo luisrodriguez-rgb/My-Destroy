@@ -105,9 +105,16 @@ export class FirstScene extends Phaser.Scene {
           ctx.clearRect(0, 0, data.width, data.height);
           ctx.save();
           ctx.beginPath();
-          ctx.moveTo(data.v0.x, data.v0.y);
-          ctx.lineTo(data.v1.x, data.v1.y);
-          ctx.lineTo(data.v2.x, data.v2.y);
+          if (data.vertices && data.vertices.length >= 3) {
+            ctx.moveTo(data.vertices[0].x, data.vertices[0].y);
+            for (let vIdx = 1; vIdx < data.vertices.length; vIdx++) {
+              ctx.lineTo(data.vertices[vIdx].x, data.vertices[vIdx].y);
+            }
+          } else if (data.v0 && data.v1 && data.v2) {
+            ctx.moveTo(data.v0.x, data.v0.y);
+            ctx.lineTo(data.v1.x, data.v1.y);
+            ctx.lineTo(data.v2.x, data.v2.y);
+          }
           ctx.closePath();
           ctx.clip();
           ctx.drawImage(this.surface.original, -data.cropX, -data.cropY);
@@ -1084,10 +1091,45 @@ export class FirstScene extends Phaser.Scene {
         continue;
       }
 
-      // Draw grenade
-      const fuseBlink = Math.sin(this.time.now * 0.02) > 0;
-      this.effects.fillStyle(0x1a2630).fillRect(Math.round(g.x) - 4, Math.round(g.y) - 3, 8, 6);
-      this.effects.fillStyle(fuseBlink ? 0xff4d4d : COLORS.amber).fillRect(Math.round(g.x) - 2, Math.round(g.y) - 2, 4, 4);
+      // Draw rotated tactical military grenade
+      const cosA = Math.cos(g.angle);
+      const sinA = Math.sin(g.angle);
+      const rx = (ox: number, oy: number) => g.x + ox * cosA - oy * sinA;
+      const ry = (ox: number, oy: number) => g.y + ox * sinA + oy * cosA;
+
+      // 1. Olive green segmented grenade body (piña/segmented cylinder)
+      this.effects.fillStyle(0x3e5c2a).fillRect(rx(-5, -6), ry(-5, -6), 10, 12);
+      this.effects.fillStyle(0x567c3b).fillRect(rx(-4, -5), ry(-4, -5), 8, 3).fillRect(rx(-4, 0), ry(-4, 0), 8, 3);
+      this.effects.fillStyle(0x273d1a).fillRect(rx(-5, -2), ry(-5, -2), 10, 2);
+
+      // 2. Steel collar & striker neck
+      this.effects.fillStyle(0x2d3e4e).fillRect(rx(-3, -9), ry(-3, -9), 6, 3);
+
+      // 3. Curved safety fly-off lever (spoon) along side
+      this.effects.lineStyle(1.5, 0x8ea2b4, 0.95);
+      this.effects.lineBetween(rx(-3, -8), ry(-3, -8), rx(-7, -4), ry(-7, -4));
+      this.effects.lineBetween(rx(-7, -4), ry(-7, -4), rx(-6, 3), ry(-6, 3));
+
+      // 4. Gold pull-ring
+      this.effects.lineStyle(1.2, 0xf1c40f, 0.95);
+      this.effects.strokeCircle(rx(4, -8), ry(4, -8), 2.5);
+
+      // 5. Active burning fuse sparks & trailing smoke
+      const fuseTipX = rx(0, -9);
+      const fuseTipY = ry(0, -9);
+      const isUrgent = g.fuse < 350;
+      const blink = Math.sin(this.time.now * 0.05) > 0;
+
+      // Sparkling tip
+      this.effects.fillStyle(0xffffff, 0.95).fillCircle(fuseTipX, fuseTipY, 2);
+      this.effects.fillStyle(isUrgent && blink ? 0xff2222 : 0xff8800, 0.9).fillCircle(fuseTipX, fuseTipY, 3.5);
+
+      // Smoke puff trailing behind velocity vector
+      if (!this.prefs.reducedMotion && Math.random() < 0.4) {
+        const backX = fuseTipX - g.vx * 0.02 + (Math.random() - 0.5) * 3;
+        const backY = fuseTipY - g.vy * 0.02 + (Math.random() - 0.5) * 3;
+        this.effects.fillStyle(0x8898a8, 0.4).fillCircle(backX, backY, 2.5);
+      }
     }
 
     // Update and draw flying & swirling singularities
@@ -1144,30 +1186,51 @@ export class FirstScene extends Phaser.Scene {
         continue;
       }
 
-      // Draw swirling accretion disk
+      // Draw dynamic cosmic singularity with accretion disk & 4 logarithmic spiral arms
       const vProgress = 1 - v.fuse / v.maxFuse;
-      const coreR = Math.max(6, 12 * Math.sin(vProgress * Math.PI));
+      const isCollapsing = v.fuse < 220;
+      const coreR = isCollapsing
+        ? Math.max(3, 7 * (v.fuse / 220))
+        : Math.max(7, 13 * Math.sin(vProgress * Math.PI));
 
-      // 1. Dark event horizon center
-      this.effects.fillStyle(0x05070a, 0.95).fillCircle(v.x, v.y, coreR);
+      // 1. Gravitational lensing background distortion ring
+      const pulseWave = (this.time.now * 0.02) % 18;
+      this.effects.lineStyle(1.5, 0x9b5de5, 0.45 * (1 - pulseWave / 18));
+      this.effects.strokeCircle(v.x, v.y, coreR + 8 + pulseWave);
 
-      // 2. Swirling glowing accretion rings
-      this.effects.lineStyle(2, COLORS.cyan, 0.85);
-      this.effects.strokeCircle(v.x, v.y, coreR + 4);
-
-      this.effects.lineStyle(1.5, 0x9b5de5, 0.75);
-      this.effects.strokeCircle(v.x, v.y, coreR + 9 + Math.sin(v.angle) * 3);
-
-      this.effects.lineStyle(1, COLORS.amber, 0.6);
-      this.effects.strokeCircle(v.x, v.y, coreR + 15 + Math.cos(v.angle) * 4);
-
-      // 3. Orbiting gravitational jets
-      for (let j = 0; j < 3; j++) {
-        const jetAngle = v.angle + (j * Math.PI * 2) / 3;
-        const jx = v.x + Math.cos(jetAngle) * (coreR + 8);
-        const jy = v.y + Math.sin(jetAngle) * (coreR + 8);
-        this.effects.fillStyle(0x79e3d8, 0.9).fillRect(jx - 1.5, jy - 1.5, 3, 3);
+      // 2. 4 Curved swirling spiral plasma arms (logarithmic accretion spiral)
+      for (let arm = 0; arm < 4; arm++) {
+        const armBase = v.angle + (arm * Math.PI) / 2;
+        for (let step = 1; step <= 7; step++) {
+          const t = step / 7;
+          const spiralAngle = armBase + t * 2.1;
+          const spiralDist = coreR + 2 + t * 20;
+          const px = v.x + Math.cos(spiralAngle) * spiralDist;
+          const py = v.y + Math.sin(spiralAngle) * spiralDist;
+          const color = step % 2 === 0 ? 0x9b5de5 : 0x00f5d4;
+          this.effects.fillStyle(color, (1 - t * 0.6) * 0.9).fillRect(px - 1.5, py - 1.5, 3, 3);
+        }
       }
+
+      // 3. Inward matter suction filaments
+      for (let f = 0; f < 3; f++) {
+        const fAngle = -v.angle * 1.5 + (f * Math.PI * 2) / 3;
+        const outX = v.x + Math.cos(fAngle) * (coreR + 22);
+        const outY = v.y + Math.sin(fAngle) * (coreR + 22);
+        const inX = v.x + Math.cos(fAngle + 0.5) * (coreR + 2);
+        const inY = v.y + Math.sin(fAngle + 0.5) * (coreR + 2);
+        this.effects.lineStyle(1, 0x79e3d8, 0.65);
+        this.effects.lineBetween(outX, outY, inX, inY);
+      }
+
+      // 4. Glowing Photonic Ring
+      this.effects.lineStyle(2, 0xffffff, 0.9);
+      this.effects.strokeCircle(v.x, v.y, coreR + 1);
+      this.effects.lineStyle(3, 0x79e3d8, 0.7);
+      this.effects.strokeCircle(v.x, v.y, coreR + 2.5);
+
+      // 5. Absolute Dark Event Horizon
+      this.effects.fillStyle(0x010306, 0.98).fillCircle(v.x, v.y, coreR);
     }
 
     // Update fragments
