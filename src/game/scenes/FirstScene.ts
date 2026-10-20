@@ -56,6 +56,7 @@ export class FirstScene extends Phaser.Scene {
   private inside = false;
   private shotTime = -1000;
   private currentWeaponId: WeaponId = 'pistol';
+  private lastLaserPoint: { x: number; y: number } | null = null;
   private lastShot?: { time: number; flash: number; weapon: WeaponId; tracers: ShotTracer[] };
   private shots = 0;
   private hits = 0;
@@ -476,24 +477,43 @@ export class FirstScene extends Phaser.Scene {
       return;
     }
 
-    // 4. THERMAL LASER BEAM
+    // 4. THERMAL LASER BEAM (Smooth continuous path carving)
     if (this.currentWeaponId === 'laser') {
-      const hit = this.surface.hit(this.aim.x, this.aim.y);
-      const tracers: ShotTracer[] = [{ mx, my, x: this.aim.x, y: this.aim.y, hit }];
-      this.lastShot = { time: now, flash: weapon.flash, weapon: 'laser', tracers };
+      const fromX = this.lastLaserPoint ? this.lastLaserPoint.x : this.aim.x;
+      const fromY = this.lastLaserPoint ? this.lastLaserPoint.y : this.aim.y;
+      const toX = this.aim.x;
+      const toY = this.aim.y;
+      const dist = Math.hypot(toX - fromX, toY - fromY);
+      const steps = Math.max(1, Math.ceil(dist / 5));
 
-      if (hit) {
-        const result = this.surface.damage(this.aim.x, this.aim.y, weapon.radius, this.shots * 1.77);
-        if (result.removed.length) {
-          this.hits++;
-          this.emitImpact(this.aim.x, this.aim.y, baseAngle, weapon.radius, weapon.fragments);
-          this.debrisManager?.applyBlastImpulse(this.aim.x, this.aim.y, weapon.radius * 1.1, 95);
-          this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
-          this.checkDetachables();
-          this.checkTextSplits(this.aim.x, this.aim.y, weapon.radius);
+      let anyHit = false;
+      for (let s = 0; s <= steps; s++) {
+        const t = steps === 0 ? 1 : s / steps;
+        const curX = fromX + (toX - fromX) * t;
+        const curY = fromY + (toY - fromY) * t;
+        const hit = this.surface.hit(curX, curY);
+        if (hit) {
+          anyHit = true;
+          const result = this.surface.damage(curX, curY, weapon.radius, this.shots * 1.77 + s);
+          if (result.removed.length) {
+            this.emitImpact(curX, curY, baseAngle, weapon.radius, weapon.fragments);
+            this.debrisManager?.applyBlastImpulse(curX, curY, weapon.radius * 1.1, 75);
+            this.checkTextSplits(curX, curY, weapon.radius);
+          }
         }
       }
-      this.audio.laserPulse(hit);
+
+      this.lastLaserPoint = { x: toX, y: toY };
+
+      if (anyHit) {
+        this.hits++;
+        this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+        this.checkDetachables();
+      }
+
+      const tracers: ShotTracer[] = [{ mx, my, x: toX, y: toY, hit: anyHit }];
+      this.lastShot = { time: now, flash: weapon.flash, weapon: 'laser', tracers };
+      this.audio.laserPulse(anyHit);
       this.notify();
       return;
     }
@@ -912,6 +932,8 @@ export class FirstScene extends Phaser.Scene {
     if (this.input.activePointer.isDown && this.currentWeaponId === 'laser' && !this.paused) {
       this.aim = this.pointerPosition(this.input.activePointer);
       this.shoot();
+    } else {
+      this.lastLaserPoint = null;
     }
 
     const w = this.currentWeapon;
