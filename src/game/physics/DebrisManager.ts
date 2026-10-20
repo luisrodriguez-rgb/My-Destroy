@@ -117,9 +117,9 @@ export class DebrisManager {
       for (let sx = p.x; sx < p.x + p.width; sx += segWidth) {
         const sw = Math.min(segWidth, p.x + p.width - sx);
         const cx = sx + sw / 2;
-        const cy = p.y + p.height / 2;
+        const cy = p.y + 2.0; // Thin landing sheet at the very top edge of platform
         const pBody = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(cx, cy));
-        const pCol = RAPIER.ColliderDesc.cuboid(sw / 2, p.height / 2);
+        const pCol = RAPIER.ColliderDesc.cuboid(sw / 2, 2.0);
         pCol.setFriction(0.8);
         pCol.setRestitution(0.2);
         const collider = this.world.createCollider(pCol, pBody);
@@ -127,7 +127,7 @@ export class DebrisManager {
           cx,
           cy,
           width: sw,
-          height: p.height,
+          height: 4.0,
           body: pBody,
           collider,
           active: true,
@@ -183,27 +183,29 @@ export class DebrisManager {
 
   /**
    * Synchronizes platform colliders against RegionMask destruction.
-   * If a platform section is destroyed, its Rapier collider is removed and resting debris falls!
+   * If any supporting point is damaged, the Rapier collider is immediately removed
+   * and resting debris receives a downward nudge so nothing hangs like stalactites.
    */
   syncPlatforms(isSolid: (x: number, y: number) => boolean): void {
     if (!this.world || !this.isInitialized) return;
     for (const seg of this.platformSegments) {
       if (!seg.active) continue;
-      // Sample 3 points along the segment top to detect perforation
-      const topY = seg.cy - seg.height / 2 + 2;
+      // Sample 3 points along the thin top edge
+      const topY = seg.cy - 1;
       const solidLeft = isSolid(seg.cx - seg.width * 0.35, topY);
       const solidCenter = isSolid(seg.cx, topY);
       const solidRight = isSolid(seg.cx + seg.width * 0.35, topY);
 
-      if (!solidLeft && !solidCenter && !solidRight) {
+      // Aggressive deactivation: if any sample point is punctured, dissolve collider
+      if (!solidCenter || !solidLeft || !solidRight) {
         this.world.removeCollider(seg.collider, true);
         seg.active = false;
-        // Wake up nearby sleeping debris resting on this segment so they tumble down!
+        // Wake up resting debris and apply a downward push
         for (const piece of this.activeDebris) {
           const pos = piece.body.translation();
-          if (Math.abs(pos.x - seg.cx) < seg.width / 2 + 10 && Math.abs(pos.y - seg.cy) < 28) {
+          if (Math.abs(pos.x - seg.cx) < seg.width / 2 + 10 && Math.abs(pos.y - seg.cy) < 24) {
             piece.body.wakeUp();
-            piece.body.applyImpulse({ x: (Math.random() - 0.5) * 18, y: 14 }, true);
+            piece.body.applyImpulse({ x: (Math.random() - 0.5) * 12, y: 16 }, true);
           }
         }
       }
@@ -334,11 +336,23 @@ export class DebrisManager {
         this.host.addDebrisFrame(frameKey, frameCropX, frameCropY, w, h);
       }
 
-      const visual = this.host.createDebrisImage(gx, gy, frameKey, originX, originY);
+      // Spawn clearance: prevent triangles from spawning inside or stuck against platform colliders
+      let spawnY = gy;
+      for (const seg of this.platformSegments) {
+        if (!seg.active) continue;
+        if (Math.abs(gx - seg.cx) < seg.width / 2 + 6) {
+          const dy = spawnY - seg.cy;
+          if (Math.abs(dy) < 10) {
+            spawnY = dy < 0 ? seg.cy - 12 : seg.cy + 12;
+          }
+        }
+      }
+
+      const visual = this.host.createDebrisImage(gx, spawnY, frameKey, originX, originY);
 
       // Create dynamic rigid body in Rapier with Continuous Collision Detection (CCD)
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(gx, gy)
+        .setTranslation(gx, spawnY)
         .setCcdEnabled(true);
       const body = this.world.createRigidBody(bodyDesc);
 
