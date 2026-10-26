@@ -2,6 +2,7 @@ import * as Phaser from 'phaser';
 import { FirstScene } from './scenes/FirstScene';
 import { WORLD } from './tuning';
 import type { Preferences, SceneCallbacks, WeaponId } from './bridge';
+import type { ScrapedPageResult } from '../server/scraper';
 
 declare global {
   interface Window {
@@ -9,6 +10,8 @@ declare global {
       snapshot: FirstScene['snapshot'];
       solid: FirstScene['solid'];
       setWeapon?: (w: WeaponId) => void;
+      loadCustomPage?: (data: ScrapedPageResult) => Promise<void>;
+      loadDemoPage?: () => void;
     };
   }
 }
@@ -34,7 +37,7 @@ export function createGame(parent: HTMLElement, prefs: Preferences, callbacks: S
       snapshot: () => scene.snapshot(),
       solid: (x, y) => scene.solid(x, y),
       setWeapon: (w: WeaponId) => scene.setWeapon(w),
-      loadCustomPage: (data: any) => scene.loadCustomPage(data),
+      loadCustomPage: (data: ScrapedPageResult) => scene.loadCustomPage(data),
       loadDemoPage: () => scene.loadDemoPage(),
     };
   }
@@ -46,7 +49,7 @@ export function createGame(parent: HTMLElement, prefs: Preferences, callbacks: S
       preferences: (p: Preferences) => scene.setPreferences(p),
       focus: () => scene.focus(),
       setWeapon: (w: WeaponId) => scene.setWeapon(w),
-      loadCustomPage: (data: any) => scene.loadCustomPage(data),
+      loadCustomPage: (data: ScrapedPageResult) => scene.loadCustomPage(data),
       loadDemoPage: () => scene.loadDemoPage(),
     },
     destroy() {

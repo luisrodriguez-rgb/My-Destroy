@@ -1,7 +1,7 @@
 import RAPIER from '@dimforge/rapier2d-compat';
 import Delaunator from 'delaunator';
 import { PAPER, WORLD } from '../tuning';
-import { getDemoPlatforms } from '../platforms/demoPlatforms';
+import { getDemoPlatforms, type Platform } from '../platforms/demoPlatforms';
 
 export interface VisualDebris {
   setPosition(x: number, y: number): void;

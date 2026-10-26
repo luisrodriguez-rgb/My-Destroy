@@ -1,5 +1,6 @@
 export type { WeaponId } from './weapons/types';
 import type { WeaponId } from './weapons/types';
+import type { ScrapedPageResult } from '../server/scraper';
 
 export type Preferences = { muted: boolean; reducedMotion: boolean };
 export type SceneStats = {
@@ -16,7 +17,7 @@ export type SceneControls = {
   preferences(value: Preferences): void;
   focus(): void;
   setWeapon(id: WeaponId): void;
-  loadCustomPage(data: any): Promise<void>;
+  loadCustomPage(data: ScrapedPageResult): Promise<void>;
   loadDemoPage(): void;
 };
 export type SceneCallbacks = { update(stats: SceneStats): void; toggleMute(): void };
