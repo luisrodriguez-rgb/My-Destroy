@@ -80,5 +80,14 @@ export default defineConfig({
       },
     },
   ],
-  build: { rollupOptions: { output: { manualChunks: { phaser: ['phaser'] } } } },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          phaser: ['phaser'],
+          rapier: ['@dimforge/rapier2d-compat'],
+        },
+      },
+    },
+  },
 });
