@@ -33,8 +33,18 @@ export interface TextSplitResult {
 
 export class DOMTextManager {
   private chars: TextChar[] = [];
+  private detachedCount = 0;
+  private measureCtx: CanvasRenderingContext2D | null = null;
 
   constructor(runs: TextRunInput[] = []) {
+    if (typeof document !== 'undefined') {
+      try {
+        const canvas = document.createElement('canvas');
+        this.measureCtx = canvas.getContext('2d');
+      } catch {
+        this.measureCtx = null;
+      }
+    }
     if (runs.length > 0) {
       this.loadRuns(runs);
     }
@@ -42,13 +52,18 @@ export class DOMTextManager {
 
   loadRuns(runs: TextRunInput[]): void {
     this.chars = [];
+    this.detachedCount = 0;
     for (const run of runs) {
       const fontSize = run.fontSize;
       const fontFamily = run.fontFamily;
       const color = run.color || '#2c3431';
       const text = run.text;
 
-      // Estimate character width proportionally or mono
+      if (this.measureCtx) {
+        this.measureCtx.font = `${fontSize}px ${fontFamily}`;
+      }
+
+      // Estimate character width proportionally or mono as fallback
       const isMono = fontFamily.toLowerCase().includes('mono');
       const avgCharWidth = isMono ? fontSize * 0.6 : fontSize * 0.52;
 
@@ -59,8 +74,10 @@ export class DOMTextManager {
         const ch = text[i];
         let chWidth = avgCharWidth;
 
-        // Custom narrow/wide character adjustments for proportional fonts
-        if (!isMono) {
+        const measured = this.measureCtx?.measureText(ch)?.width;
+        if (measured && measured > 0) {
+          chWidth = measured;
+        } else if (!isMono) {
           if ('ijl|!.,:;\' '.includes(ch)) chWidth = fontSize * 0.28;
           else if ('mwMW_@%'.includes(ch)) chWidth = fontSize * 0.82;
           else if (ch === ch.toUpperCase() && ch >= 'A' && ch <= 'Z') chWidth = fontSize * 0.68;
@@ -92,11 +109,11 @@ export class DOMTextManager {
   }
 
   get remainingChars(): number {
-    return this.chars.filter(c => !c.detached).length;
+    return this.chars.length - this.detachedCount;
   }
 
   get detachedChars(): number {
-    return this.chars.filter(c => c.detached).length;
+    return this.detachedCount;
   }
 
   /**
@@ -133,6 +150,7 @@ export class DOMTextManager {
 
     for (const item of selected) {
       item.char.detached = true;
+      this.detachedCount++;
     }
 
     return selected;
@@ -142,5 +160,6 @@ export class DOMTextManager {
     for (const ch of this.chars) {
       ch.detached = false;
     }
+    this.detachedCount = 0;
   }
 }
