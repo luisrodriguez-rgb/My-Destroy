@@ -48,6 +48,10 @@ export class FirstScene extends Phaser.Scene {
   private audio = new ShotAudio();
   private fragments: Fragment[] = [];
   private debrisLayer!: Phaser.GameObjects.Container;
+  private debrisAtlas!: Phaser.Textures.CanvasTexture;
+  private freeAtlasSlots: number[] = [];
+  private frameToAtlasSlot = new Map<string, number>();
+  private debrisAtlasDirty = false;
   private dust: Dust[] = [];
   private grenades: Grenade[] = [];
   private vortices: Vortex[] = [];
@@ -92,13 +96,53 @@ export class FirstScene extends Phaser.Scene {
     debrisMaskGraphics.fillStyle(0xffffff).fillRect(0, 0, WORLD.width, 530);
     this.debrisLayer.setMask(debrisMaskGraphics.createGeometryMask());
 
+    const ATLAS_COLS = 16;
+    const ATLAS_SLOT = 64;
+    this.debrisAtlas = this.textures.createCanvas('debris-atlas', ATLAS_COLS * ATLAS_SLOT, ATLAS_COLS * ATLAS_SLOT)!;
+    this.freeAtlasSlots = Array.from({ length: ATLAS_COLS * ATLAS_COLS }, (_, i) => ATLAS_COLS * ATLAS_COLS - 1 - i);
+    this.frameToAtlasSlot.clear();
+
     this.debrisManager = new DebrisManager({
       createDebrisImage: (x, y, frameKey, originX = 0.5, originY = 0.5) => {
-        const img = this.add.image(x, y, frameKey).setOrigin(originX, originY);
+        const img = this.frameToAtlasSlot.has(frameKey)
+          ? this.add.image(x, y, 'debris-atlas', frameKey).setOrigin(originX, originY)
+          : this.add.image(x, y, frameKey).setOrigin(originX, originY);
         this.debrisLayer.add(img);
         return img;
       },
       addDebrisPolygon: (data) => {
+        if (data.width <= ATLAS_SLOT && data.height <= ATLAS_SLOT && this.freeAtlasSlots.length > 0) {
+          const slot = this.freeAtlasSlots.pop()!;
+          const sx = (slot % ATLAS_COLS) * ATLAS_SLOT;
+          const sy = Math.floor(slot / ATLAS_COLS) * ATLAS_SLOT;
+          const ctx = this.debrisAtlas.context;
+          ctx.clearRect(sx, sy, ATLAS_SLOT, ATLAS_SLOT);
+          ctx.save();
+          ctx.translate(sx, sy);
+          ctx.beginPath();
+          if (data.vertices && data.vertices.length >= 3) {
+            ctx.moveTo(data.vertices[0].x, data.vertices[0].y);
+            for (let vIdx = 1; vIdx < data.vertices.length; vIdx++) {
+              ctx.lineTo(data.vertices[vIdx].x, data.vertices[vIdx].y);
+            }
+          } else if (data.v0 && data.v1 && data.v2) {
+            ctx.moveTo(data.v0.x, data.v0.y);
+            ctx.lineTo(data.v1.x, data.v1.y);
+            ctx.lineTo(data.v2.x, data.v2.y);
+          }
+          ctx.closePath();
+          ctx.clip();
+          ctx.drawImage(this.surface.original, -data.cropX, -data.cropY);
+          ctx.strokeStyle = '#17110dbb';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+          ctx.restore();
+          this.debrisAtlas.add(data.frameKey, 0, sx, sy, data.width, data.height);
+          this.frameToAtlasSlot.set(data.frameKey, slot);
+          this.debrisAtlasDirty = true;
+          return;
+        }
+
         const tex = this.textures.createCanvas(data.frameKey, data.width, data.height);
         if (tex) {
           const ctx = tex.context;
@@ -133,6 +177,24 @@ export class FirstScene extends Phaser.Scene {
         const pad = 2;
         const w = charData.width + pad * 2;
         const h = charData.height + pad * 2;
+        if (w <= ATLAS_SLOT && h <= ATLAS_SLOT && this.freeAtlasSlots.length > 0) {
+          const slot = this.freeAtlasSlots.pop()!;
+          const sx = (slot % ATLAS_COLS) * ATLAS_SLOT;
+          const sy = Math.floor(slot / ATLAS_COLS) * ATLAS_SLOT;
+          const ctx = this.debrisAtlas.context;
+          ctx.clearRect(sx, sy, ATLAS_SLOT, ATLAS_SLOT);
+          ctx.save();
+          ctx.font = `${charData.fontSize}px ${charData.fontFamily}`;
+          ctx.fillStyle = charData.color;
+          ctx.textBaseline = 'top';
+          ctx.fillText(charData.char, sx + pad, sy + pad);
+          ctx.restore();
+          this.debrisAtlas.add(frameKey, 0, sx, sy, w, h);
+          this.frameToAtlasSlot.set(frameKey, slot);
+          this.debrisAtlasDirty = true;
+          return;
+        }
+
         const tex = this.textures.createCanvas(frameKey, w, h);
         if (tex) {
           const ctx = tex.context;
@@ -145,8 +207,15 @@ export class FirstScene extends Phaser.Scene {
         }
       },
       removeDebrisFrame: (frameKey) => {
+        const slot = this.frameToAtlasSlot.get(frameKey);
+        if (slot !== undefined) {
+          this.frameToAtlasSlot.delete(frameKey);
+          this.debrisAtlas.remove(frameKey);
+          this.freeAtlasSlots.push(slot);
+          return;
+        }
         const tex = this.textures.get(frameKey);
-        if (tex) {
+        if (tex && tex.key !== '__MISSING') {
           tex.destroy();
         }
         this.textures.remove(frameKey);
@@ -554,6 +623,10 @@ export class FirstScene extends Phaser.Scene {
 
   private emitImpact(x: number, y: number, angle: number, radius = 24, fragmentCount = 11) {
     this.debrisManager?.spawnFracture(x, y, radius, angle, Math.min(8, Math.ceil(fragmentCount / 2)), 220);
+    if (this.debrisAtlasDirty) {
+      this.debrisAtlas.refresh();
+      this.debrisAtlasDirty = false;
+    }
     const count = this.prefs.reducedMotion ? Math.max(2, Math.floor(fragmentCount / 3)) : fragmentCount;
     for (let i = 0; i < count; i++) {
       if (this.fragments.length >= 80) this.removeFragment(0);
@@ -721,6 +794,10 @@ export class FirstScene extends Phaser.Scene {
     if (!deferFlush) {
       this.surface.flushDirty();
     }
+    if (this.debrisAtlasDirty) {
+      this.debrisAtlas.refresh();
+      this.debrisAtlasDirty = false;
+    }
   }
 
   async loadCustomPage(data: ScrapedPageResult): Promise<void> {
@@ -872,6 +949,10 @@ export class FirstScene extends Phaser.Scene {
 
   update(_time: number, delta: number) {
     if (!this.surface || this.paused) return;
+    if (this.debrisAtlasDirty) {
+      this.debrisAtlas.refresh();
+      this.debrisAtlasDirty = false;
+    }
     this.debrisManager?.update();
     const dt = Math.min(delta, 32) / 1000;
     const movement = Number(this.keys.has('KeyD') || this.keys.has('ArrowRight')) - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft'));
