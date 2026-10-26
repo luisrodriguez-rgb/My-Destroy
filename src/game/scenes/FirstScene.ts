@@ -157,7 +157,7 @@ export class FirstScene extends Phaser.Scene {
 
     const canvas = this.game.canvas;
     canvas.tabIndex = 0;
-    canvas.setAttribute('aria-label', 'Escenario destructible con plataformas y arsenal. Ratón para apuntar, clic para disparar. A/D mover, W/Espacio saltar, S bajar. 1, 2, 3 o rueda para cambiar de arma. R reinicia, M silencia y Escape pausa.');
+    canvas.setAttribute('aria-label', 'Escenario destructible con plataformas, jetpack y arsenal de 5 armas. Ratón para apuntar, clic para disparar. A/D mover, W/Espacio saltar o activar jetpack, S bajar. 1 a 5 o rueda para cambiar de arma. R reinicia, M silencia y Escape pausa.');
     canvas.addEventListener('keydown', this.onKeyDown);
     canvas.addEventListener('pointerenter', this.onEnter);
     canvas.addEventListener('pointerleave', this.onLeave);
