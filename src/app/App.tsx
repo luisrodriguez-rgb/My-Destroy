@@ -315,6 +315,7 @@ export function App() {
           <span><kbd>A</kbd><kbd>D</kbd> Mover</span>
           <span><kbd>W</kbd> Jetpack</span>
           <span><kbd>S</kbd> Bajar</span>
+          <span><kbd>E</kbd> Reparar</span>
           <span><kbd>1</kbd>–<kbd>5</kbd> / Rueda</span>
           <span><Icon name="cross" /> Disparar</span>
         </div>
@@ -323,13 +324,71 @@ export function App() {
           <button className="reset-button" onClick={reset} disabled={!stats.ready}><Icon name="reset" /><span>Reiniciar</span><kbd>R</kbd></button>
         </div>
       </div>
+
+      <div className="touch-controls" role="group" aria-label="Controles táctiles móviles">
+        <button
+          type="button"
+          className="touch-btn"
+          onPointerDown={() => controls.current?.setVirtualKey('KeyA', true)}
+          onPointerUp={() => controls.current?.setVirtualKey('KeyA', false)}
+          onPointerLeave={() => controls.current?.setVirtualKey('KeyA', false)}
+          onPointerCancel={() => controls.current?.setVirtualKey('KeyA', false)}
+          aria-label="Mover a la izquierda"
+        >
+          ◀ Izq
+        </button>
+        <button
+          type="button"
+          className="touch-btn"
+          onPointerDown={() => controls.current?.setVirtualKey('KeyW', true)}
+          onPointerUp={() => controls.current?.setVirtualKey('KeyW', false)}
+          onPointerLeave={() => controls.current?.setVirtualKey('KeyW', false)}
+          onPointerCancel={() => controls.current?.setVirtualKey('KeyW', false)}
+          aria-label="Saltar o activar Jetpack"
+        >
+          ▲ Jetpack
+        </button>
+        <button
+          type="button"
+          className="touch-btn"
+          onPointerDown={() => controls.current?.setVirtualKey('KeyS', true)}
+          onPointerUp={() => controls.current?.setVirtualKey('KeyS', false)}
+          onPointerLeave={() => controls.current?.setVirtualKey('KeyS', false)}
+          onPointerCancel={() => controls.current?.setVirtualKey('KeyS', false)}
+          aria-label="Bajar de plataforma"
+        >
+          ▼ Bajar
+        </button>
+        <button
+          type="button"
+          className="touch-btn"
+          onPointerDown={() => controls.current?.setVirtualKey('KeyD', true)}
+          onPointerUp={() => controls.current?.setVirtualKey('KeyD', false)}
+          onPointerLeave={() => controls.current?.setVirtualKey('KeyD', false)}
+          onPointerCancel={() => controls.current?.setVirtualKey('KeyD', false)}
+          aria-label="Mover a la derecha"
+        >
+          Der ▶
+        </button>
+        <button
+          type="button"
+          className="touch-btn touch-repair"
+          onPointerDown={() => controls.current?.setVirtualKey('KeyE', true)}
+          onPointerUp={() => controls.current?.setVirtualKey('KeyE', false)}
+          onPointerLeave={() => controls.current?.setVirtualKey('KeyE', false)}
+          onPointerCancel={() => controls.current?.setVirtualKey('KeyE', false)}
+          aria-label="Activar rayo reparador"
+        >
+          ✦ Reparar
+        </button>
+      </div>
     </section>
 
     <div className="below-scene">
       <p className="session-status" aria-live="polite"><span className="status-dot" />{stats.shots ? `${stats.shots} disparos · ${stats.hits} impactos` : 'Todo listo para hacer un poco de ruido.'}</p>
       <div className="preferences"><button aria-pressed={prefs.reducedMotion} onClick={() => setPrefs(p => ({ ...p, reducedMotion: !p.reducedMotion }))}><Icon name="effects" />Efectos suaves<span className={`toggle ${prefs.reducedMotion ? 'on' : ''}`} /></button><button aria-pressed={prefs.muted} onClick={() => setPrefs(p => ({ ...p, muted: !p.muted }))}><Icon name={prefs.muted ? 'muted' : 'sound'} />{prefs.muted ? 'Sonido apagado' : 'Sonido activado'}<kbd>M</kbd></button></div>
     </div>
-    <p className="mobile-note">Esta primera escena se disfruta con ratón y teclado. Los controles táctiles llegarán más adelante.</p>
+    <p className="mobile-note">Usa los botones táctiles para moverte, activar el jetpack o reparar, y toca el escenario para disparar.</p>
 
     <section className="field-notes" aria-label="Sobre la escena"><article><span className="note-index">01 — SUPERFICIE</span><h2>Una web reconocible.</h2><p>Texto, imágenes y un poco de orden. <br />Todo está esperando su primer agujero.</p></article><article><span className="note-index">02 — IMPACTO</span><h2>Cada disparo deja huella.</h2><p>Fragmentos de la página, un destello breve. <br />El daño se queda. Tú decides cuándo reiniciar.</p></article><article><span className="note-index cyan">03 — AL OTRO LADO</span><h2>Hay otro mundo debajo.</h2><p>Acero, circuitos y luces de emergencia. <br />Rompe la superficie para descubrirlo.</p></article></section>
     <footer><span>MY-DESTROY <span className="footer-cross">✦</span> HECHO PARA ROMPERSE.</span><a href="/reference/art-direction.html" target="_blank" rel="noreferrer">Ver dirección visual original ↗</a><span>PROTOTIPO 0.1 / ESCENA LOCAL</span></footer>
