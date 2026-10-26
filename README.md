@@ -100,6 +100,7 @@ El juego dispone de 5 armas con roles balísticos y destructivos calibrados para
 | **03** | **Lanzagranadas** | Explosivo Balístico | 650 ms | 38 px | Lanza un proyectil táctico rotatorio con física parabólica y rebote elástico. Cuenta con cuerpo verde oliva segmentado tipo piña, espoleta plateada, anilla dorada y mecha con chispas y estela de humo. Detona a los 1.15 s o por impacto en vacío, produciendo un cráter expansivo y sacudida de pantalla. |
 | **04** | **Láser Térmico** | Rayo Continuo | 35 ms | 8 px | Disparo continuo de alta frecuencia mientras se sostiene el botón del ratón. Ejecuta interpolación geométrica lineal cada 5 px a lo largo del trazo del puntero, esculpiendo surcos lisos y continuos sin saltos. Haz multicapa con resplandor naranja, núcleo ámbar y filamento blanco incandescente. |
 | **05** | **Vórtice** | Singularidad Gravitatoria | 1150 ms | 56 px | Proyectil balístico que desacelera en el aire ($v \times 0.96$) y forma una anomalía cósmica activa. Ejerce atracción centrípeta y torbellino tangencial (`applyVortexPull`) en un radio de 220 px, succionando escombros y letras hacia su disco de acreción con 4 brazos espirales logarítmicos. Tras 1.6 s, se comprime súbitamente e implosiona en una onda de choque expansiva de 620 N. |
+| **E / Clic Der.** | **Rayo Reparador** | Reconstrucción Nano-Cian | 35 ms | 20 px | Haz secundario continuo de reconstrucción estructural (`DestructiblePage.repair`). Restaura píxeles originales en la máscara de bits, reactiva colisionadores de plataformas cuando superan el 20 % de integridad y emite un pulso armónico cristalino (`repairPulse`). |
 
 ---
 
@@ -119,30 +120,33 @@ Todo el audio del juego se genera sintéticamente en tiempo real mediante la Web
   - *Acreción (`vortexHum`)*: Dron sub-grave palpitante (58 Hz) con modulación periódica.
   - *Implosión (`vortexImplosion`)*: Corte súbito de silencio (vacío espacial) seguido de una caída sub-grave (45 Hz a 16 Hz) y estallido expansivo.
 - **Jetpack (`jetpackHiss`)**: Ruido blanco moldeado con filtro paso-banda aéreo (1600 Hz, Q=1.8) que acompaña dinámicamente el empuje de las toberas.
+- **Rayo Reparador (`repairPulse`)**: Doble oscilador sinusoidal y triangular con barrido armónico ascendente (520 Hz a 880 Hz y 1040 Hz a 1560 Hz) que acompaña la reconstrucción nano-cian.
 
 ---
 
 ## 7. Integración con Playwright Scraper Backend
 
-El sistema incluye una herramienta de captura en vivo (`src/server/scraper.ts`) construida sobre Express y Playwright:
+El sistema incluye un middleware de captura en vivo (`src/server/scraper.ts` integrado en `vite.config.ts` tanto en desarrollo como en `vite preview`):
 
-1. **Proxy y sanitización**: Valida URLs HTTP/HTTPS y restringe el acceso a rangos de red locales o maliciosos (prevención de SSRF).
-2. **Navegador headless en alta resolución**: Renderiza la página solicitada en un viewport calibrado de $1152 \times 496\text{ px}$.
-3. **Extracción de geometría de maquetación**: Inspecciona el árbol DOM de la página real e identifica los elementos estructurales primarios (`h1`, `h2`, `article`, `section`, `nav`, `.infobox`, `button`, `img`), extrayendo sus rectángulos de posición (`getBoundingClientRect`).
-4. **Conversión a plataformas de juego**: Transforma estas cajas en plataformas atravesables y elementos desprendibles (`detachables`), permitiendo al operario subirse sobre los párrafos o destruir los titulares de páginas reales como Wikipedia o GitHub.
-5. **Modo fuera de línea resiliente**: Si no se especifica conexión a internet o el scraper se ejecuta sin red externa, el motor recurre automáticamente a representaciones vectoriales simuladas con maquetación idéntica.
+1. **Seguridad anti-SSRF y prevención de DNS Rebinding**: Valida protocolos HTTP/HTTPS, restringe puertos a `80` y `443`, verifica mediante resolución DNS previa que el host no apunte a rangos privados, loopback o link-local (IPv4/IPv6) e intercepta sub-peticiones de Playwright en tiempo real.
+2. **Control de recursos, cola de concurrencia y caché LRU**: Limita el tamaño del payload de entrada (4 KB), serializa la creación de instancias de Chromium headless (máximo 2 concurrentes) y almacena capturas recientes en una caché LRU en memoria (TTL de 5 minutos).
+3. **Navegador headless en alta resolución**: Renderiza la página solicitada en un viewport calibrado de $1152 \times 496\text{ px}$.
+4. **Extracción de geometría de maquetación**: Inspecciona el árbol DOM de la página real e identifica los elementos estructurales primarios (`h1`, `h2`, `article`, `section`, `nav`, `.infobox`, `button`, `img`), extrayendo sus rectángulos de posición (`getBoundingClientRect`).
+5. **Conversión a plataformas de juego**: Transforma estas cajas en plataformas atravesables y elementos desprendibles (`detachables`), permitiendo al operario subirse sobre los párrafos o destruir los titulares de páginas reales como Wikipedia o GitHub.
+6. **Modo fuera de línea resiliente**: Si no se especifica conexión a internet o el scraper se ejecuta sin red externa, el motor recurre automáticamente a representaciones vectoriales simuladas con maquetación idéntica.
 
 ---
 
 ## 8. Controles
 
-| Acción | Entrada Teclado / Ratón |
+| Acción | Entrada Teclado / Ratón / Táctil |
 | :--- | :--- |
-| **Moverse a la izquierda / derecha** | <kbd>A</kbd> / <kbd>D</kbd> o Flechas Izquierda / Derecha |
-| **Saltar / Activar Jetpack** | <kbd>W</kbd>, <kbd>Espacio</kbd> o Flecha Arriba (mantener en el aire para volar) |
-| **Bajar de plataforma** | <kbd>S</kbd> o Flecha Abajo |
-| **Apuntar retícula** | Movimiento del Ratón (retículas adaptadas por arma) |
-| **Disparar / Activar corte** | Clic Izquierdo (mantener para láser continuo) |
+| **Moverse a la izquierda / derecha** | <kbd>A</kbd> / <kbd>D</kbd>, Flechas Izquierda / Derecha o botones táctiles `◀` / `▶` |
+| **Saltar / Activar Jetpack** | <kbd>W</kbd>, <kbd>Espacio</kbd>, Flecha Arriba o botón táctil `▲` (mantener en el aire para volar) |
+| **Bajar de plataforma** | <kbd>S</kbd>, Flecha Abajo o botón táctil `▼` |
+| **Apuntar retícula** | Movimiento del Ratón o toque sobre el lienzo |
+| **Disparar / Activar corte** | Clic Izquierdo o toque en el lienzo (mantener para láser continuo) |
+| **Rayo Reparador Nano-Cian** | Clic Derecho sostenido, tecla <kbd>E</kbd> o botón `REPARAR [E]` |
 | **Seleccionar Ranura 01 (Pistola)** | <kbd>1</kbd> o clic en ranura 01 |
 | **Seleccionar Ranura 02 (Escopeta)** | <kbd>2</kbd> o clic en ranura 02 |
 | **Seleccionar Ranura 03 (Granadas)** | <kbd>3</kbd> o clic en ranura 03 |
@@ -162,7 +166,9 @@ My-Destroy/
 ├── docs/                             # Especificaciones técnicas y registros de auditoría
 │   ├── ARQUITECTURA.md               # Detalle de renderizado, máscaras, físicas y armas
 │   ├── CONTEXTO.md                   # Resumen del proyecto y metas arquitectónicas
+│   ├── PRIMERA-ESCENA.md             # Especificación de la primera escena jugable
 │   ├── RECUPERACION.md               # Trazabilidad de los 17 archivos base recuperados
+│   ├── RECURSOS.md                   # Inventario de recursos gráficos y tipográficos
 │   ├── VALIDACION.md                 # Informe de pruebas unitarias, E2E y rendimiento
 │   └── previews/                     # Capturas en alta resolución generadas por pruebas
 │       ├── extended-arsenal.png      # Captura de demostración del arsenal y jetpack
@@ -171,27 +177,25 @@ My-Destroy/
 │       └── debris-dither-live.png    # Captura de dithering y escombros en plataforma
 ├── src/
 │   ├── app/                          # Capa de presentación en React 19
-│   │   ├── App.tsx                   # HUD, dock de armas, barra de navegación simulada
-│   │   ├── icons.tsx                 # Iconografía pixel-art SVG para armas y controles
-│   │   └── styles.css                # Sistema de diseño industrial oscuro
+│   │   ├── App.tsx                   # HUD, dock de armas, controles móviles y barra URL
+│   │   └── styles.css                # Sistema de diseño industrial oscuro y responsivo
 │   ├── game/                         # Motor de juego en Phaser 4.2.1
 │   │   ├── audio/
-│   │   │   └── ShotAudio.ts          # Sintetizador Web Audio procedural de 5 armas y jetpack
+│   │   │   └── ShotAudio.ts          # Sintetizador Web Audio procedural (armas, jetpack, reparación)
 │   │   ├── destruction/
-│   │   │   ├── RegionMask.ts         # Cuadrícula CPU 2px con Bayer Dithering 4x4
-│   │   │   └── Surface.ts            # Bloques WebGL de la página dañada y carbonización
+│   │   │   ├── DestructiblePage.ts   # Bloques WebGL de la página dañada, carbonización y reparación
+│   │   │   └── RegionMask.ts         # Cuadrícula CPU 2px con Bayer Dithering 4x4 y reconstrucción
 │   │   ├── fixtures/
 │   │   │   └── demoPage.ts           # Maquetación editorial sintética y glifos base
 │   │   ├── physics/
-│   │   │   ├── DebrisManager.ts      # Físicas de fragmentos Rapier2D, quads y esquirlas
-│   │   │   ├── DebrisPhysics.ts      # Colisionadores triangulares y poligonales
+│   │   │   ├── DebrisManager.ts      # Físicas Rapier2D, fractura Delaunay y colisionadores reactivables
 │   │   │   └── PlatformController.ts # Controlador de salto, jetpack continuo y caída
 │   │   ├── platforms/
 │   │   │   └── demoPlatforms.ts      # Plataformas transitables de la demo editorial
 │   │   ├── scenes/
-│   │   │   └── FirstScene.ts         # Orquestador Phaser (render, bucle de armas, actor)
+│   │   │   └── FirstScene.ts         # Orquestador Phaser y atlas dinámico de escombros en GPU
 │   │   ├── text/
-│   │   │   └── DOMTextManager.ts     # Deconstrucción tipográfica y colisión box-circle
+│   │   │   └── DOMTextManager.ts     # Deconstrucción tipográfica y colisión box-circle O(1)
 │   │   ├── weapons/
 │   │   │   ├── types.ts              # Tipos y contratos de configuración de armas
 │   │   │   └── weapons.ts            # Balanceo y cálculo de abanicos de perdigones
@@ -199,12 +203,13 @@ My-Destroy/
 │   │   ├── createGame.ts             # Configuración de canvas y ciclo de vida
 │   │   └── tuning.ts                 # Constantes de física, dimensiones y colores
 │   └── server/
-│       ├── index.ts                  # Servidor proxy Express para scraping
-│       └── scraper.ts                # Extractor Playwright headless de páginas web vivas
-└── tests/                            # Suites de pruebas automatizadas
-    ├── scene.spec.ts                 # Pruebas E2E de armas, jetpack, soporte y físicas
-    ├── capture.spec.ts               # Generador de capturas en vivo de alta resolución
-    └── endurance.spec.ts             # Prueba de resistencia de disparo continuo
+│       └── scraper.ts                # Extractor Playwright headless con protección SSRF y caché LRU
+├── tests/                            # Suites de pruebas E2E con Playwright
+│   ├── scene.spec.ts                 # Pruebas E2E de armas, jetpack, soporte y físicas
+│   ├── scraper.spec.ts               # Pruebas E2E de scraping de páginas y desprendimiento DOM
+│   ├── capture.spec.ts               # Generador de capturas en vivo de alta resolución
+│   └── stress.spec.ts                # Prueba de resistencia de disparo continuo
+└── vite.config.ts                    # Configuración Vite, chunking manual y middleware /api/scrape
 ```
 
 ---
@@ -242,13 +247,13 @@ Evalúan la lógica de negocio sin depender del renderizado de navegador:
 ```bash
 npm test
 ```
-*37 pruebas unitarias ejecutadas en ~700 ms, cubriendo:*
-- Máscara de destrucción `RegionMask` y cálculo de Bayer dithering 4x4.
+*42 pruebas unitarias ejecutadas en ~450 ms, cubriendo:*
+- Máscara de destrucción `RegionMask` (Bayer dithering 4x4, borrado directo `clearRect` y reconstrucción `repair`).
 - Cinemática de `PlatformController`, detección de solidez en pies y aceleración de `jetpackThrust`.
-- Gestión de cuerpos rígidos en `DebrisManager` (triángulos, cuadriláteros, esquirlas y atracción de vórtice).
+- Gestión de cuerpos rígidos en `DebrisManager` (triángulos, cuadriláteros, esquirlas, atracción de vórtice y reactivación de plataformas al reparar).
 - Deconstrucción tipográfica y colisiones caja-círculo en `DOMTextManager`.
 - Balanceo de las 5 armas y distribución geométrica de perdigones en `weapons`.
-- Validación de URLs y scraping seguro en `scraper`.
+- Validación anti-SSRF, bloqueo de DNS rebinding (IPv4/IPv6 privadas) y caché LRU en `scraper`.
 
 ### Pruebas End-to-End en Navegador Real (Playwright)
 Ejecutan escenarios jugables en Chrome con WebAssembly, renderizado WebGL y simulación física de Rapier2D:
