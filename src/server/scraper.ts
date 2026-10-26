@@ -46,16 +46,249 @@ const VIEWPORT_HEIGHT = 488;
 const MIN_VERTICAL_GAP = 42;
 const MAX_PLATFORMS = 14;
 const MAX_DETACHABLES = 8;
+const MAX_CACHE_ENTRIES = 16;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CONCURRENT_SCRAPES = 2;
+const MAX_QUEUE_LENGTH = 6;
+
+export class SecurityBlockError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SecurityBlockError';
+  }
+}
+
+interface CacheEntry {
+  result: ScrapedPageResult;
+  expiresAt: number;
+}
+
+const scrapeCache = new Map<string, CacheEntry>();
+let activeScrapes = 0;
+const waitQueue: Array<() => void> = [];
+
+export function clearScrapeCache(): void {
+  scrapeCache.clear();
+}
+
+function getCachedScrape(url: string): ScrapedPageResult | undefined {
+  const entry = scrapeCache.get(url);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    scrapeCache.delete(url);
+    return undefined;
+  }
+  // Refresh LRU order
+  scrapeCache.delete(url);
+  scrapeCache.set(url, entry);
+  return entry.result;
+}
+
+function setCachedScrape(url: string, result: ScrapedPageResult): void {
+  if (scrapeCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = scrapeCache.keys().next().value;
+    if (oldestKey) scrapeCache.delete(oldestKey);
+  }
+  scrapeCache.set(url, {
+    result,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+}
+
+async function acquireScrapeSlot(): Promise<void> {
+  if (activeScrapes < MAX_CONCURRENT_SCRAPES) {
+    activeScrapes++;
+    return;
+  }
+  if (waitQueue.length >= MAX_QUEUE_LENGTH) {
+    throw new Error('Servidor de capturas ocupado. Intenta de nuevo en unos segundos.');
+  }
+  await new Promise<void>(resolve => waitQueue.push(resolve));
+  activeScrapes++;
+}
+
+function releaseScrapeSlot(): void {
+  activeScrapes = Math.max(0, activeScrapes - 1);
+  const next = waitQueue.shift();
+  if (next) next();
+}
+
+function detectIpVersion(ip: string): 0 | 4 | 6 {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+    const parts = ip.split('.').map(Number);
+    return parts.every(p => p >= 0 && p <= 255) ? 4 : 0;
+  }
+  if (ip.includes(':') && /^[0-9a-f:.]+$/i.test(ip)) {
+    return 6;
+  }
+  return 0;
+}
+
+async function defaultDnsLookup(host: string): Promise<Array<{ address: string }>> {
+  const dnsModule = await (Function('return import("node:dns/promises")')() as Promise<{
+    lookup: (hostname: string, options: { all: true }) => Promise<Array<{ address: string }>>;
+  }>);
+  return dnsModule.lookup(host, { all: true });
+}
+
+/**
+ * Checks whether an IPv4 or IPv6 address belongs to a private, loopback,
+ * link-local, cloud metadata, multicast, or reserved range (SSRF protection).
+ */
+export function isPrivateOrReservedIp(ip: string): boolean {
+  const normalized = ip.trim().toLowerCase().replace(/^\[|\]$/g, '');
+
+  // Handle IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1 or ::ffff:7f00:1)
+  if (normalized.startsWith('::ffff:')) {
+    const mapped = normalized.slice(7);
+    if (detectIpVersion(mapped) === 4) {
+      return isPrivateOrReservedIp(mapped);
+    }
+    const hexParts = mapped.split(':');
+    if (hexParts.length === 2) {
+      const high = parseInt(hexParts[0], 16);
+      const low = parseInt(hexParts[1], 16);
+      if (!Number.isNaN(high) && !Number.isNaN(low)) {
+        const ipv4 = `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
+        return isPrivateOrReservedIp(ipv4);
+      }
+    }
+    return true;
+  }
+
+  const version = detectIpVersion(normalized);
+  if (version === 4) {
+    const parts = normalized.split('.').map(Number);
+    if (parts.length !== 4 || parts.some(p => Number.isNaN(p) || p < 0 || p > 255)) {
+      return true;
+    }
+    const [a, b, c] = parts;
+    if (a === 0) return true; // 0.0.0.0/8
+    if (a === 10) return true; // 10.0.0.0/8 private
+    if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
+    if (a === 127) return true; // 127.0.0.0/8 loopback
+    if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local & cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 private
+    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // 192.0.0.0/24, 192.0.2.0/24
+    if (a === 192 && b === 168) return true; // 192.168.0.0/16 private
+    if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmark
+    if (a >= 224) return true; // Multicast (224.0.0.0/4) & reserved/broadcast (240.0.0.0/4)
+    return false;
+  }
+
+  if (version === 6) {
+    if (
+      normalized === '::1' ||
+      normalized === '::' ||
+      normalized === '0:0:0:0:0:0:0:1' ||
+      normalized === '0:0:0:0:0:0:0:0'
+    ) {
+      return true;
+    }
+    // Unique local (fc00::/7 -> fc.. or fd..)
+    if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
+    // Link-local (fe80::/10 -> fe8.., fe9.., fea.., feb..)
+    if (/^fe[89ab]/.test(normalized)) return true;
+    // Site-local deprecated (fec0::/10) or multicast (ff00::/8)
+    if (/^fe[cdef]/.test(normalized) || normalized.startsWith('ff')) return true;
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Validates URL syntax, protocol, and blocks private/local hostnames or IP literals.
+ */
+export function validateUrlTarget(rawUrl: string): URL {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    throw new SecurityBlockError('La URL no puede estar vacía.');
+  }
+
+  let candidate = trimmed;
+  if (candidate.includes('://')) {
+    if (!candidate.startsWith('http://') && !candidate.startsWith('https://')) {
+      throw new SecurityBlockError('Solo se permiten protocolos http:// y https://');
+    }
+  } else {
+    candidate = 'https://' + candidate;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new SecurityBlockError('Formato de URL inválido.');
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new SecurityBlockError('Solo se permiten protocolos http:// y https://');
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new SecurityBlockError('No se permiten credenciales incrustadas en la URL.');
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host === 'metadata.google.internal'
+  ) {
+    throw new SecurityBlockError('Acceso bloqueado a direcciones de red privadas o locales.');
+  }
+
+  if (detectIpVersion(host) !== 0 && isPrivateOrReservedIp(host)) {
+    throw new SecurityBlockError('Acceso bloqueado a direcciones de red privadas o locales.');
+  }
+
+  return parsed;
+}
+
+/**
+ * Resolves DNS records for a hostname and blocks DNS rebinding / private IP resolution.
+ */
+export async function assertPublicHostname(
+  hostname: string,
+  resolver: (host: string) => Promise<Array<{ address: string }>> = defaultDnsLookup
+): Promise<void> {
+  const cleanHost = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (detectIpVersion(cleanHost) !== 0) {
+    if (isPrivateOrReservedIp(cleanHost)) {
+      throw new SecurityBlockError('Acceso bloqueado a direcciones de red privadas o locales.');
+    }
+    return;
+  }
+
+  const records = await resolver(cleanHost);
+  if (!records || records.length === 0) {
+    throw new Error(`No se pudo resolver el host ${cleanHost}`);
+  }
+
+  for (const record of records) {
+    if (isPrivateOrReservedIp(record.address)) {
+      throw new SecurityBlockError('Acceso bloqueado a direcciones de red privadas o locales.');
+    }
+  }
+}
 
 let browserInstance: Browser | null = null;
 
 export async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.isConnected()) {
+    const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+    const defaultArgs = env?.CHROMIUM_NO_SANDBOX === 'true'
+      ? ['--no-sandbox', '--disable-setuid-sandbox']
+      : [];
     try {
       browserInstance = await chromium.launch({
         channel: 'chrome',
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: defaultArgs,
       });
     } catch {
       browserInstance = await chromium.launch({
@@ -291,146 +524,185 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
     return getPresetPage('demo');
   }
 
-  let validUrl = normalized;
-  if (validUrl.includes('://')) {
-    if (!validUrl.startsWith('http://') && !validUrl.startsWith('https://')) {
-      throw new Error('Solo se permiten protocolos http:// y https://');
+  // Validate URL syntax, protocol, and block SSRF targets (localhost, private IPs, metadata)
+  const parsedUrl = validateUrlTarget(normalized);
+  const validUrl = parsedUrl.href;
+
+  const cached = getCachedScrape(validUrl);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    await assertPublicHostname(parsedUrl.hostname);
+  } catch (err) {
+    if (err instanceof SecurityBlockError) {
+      throw err;
     }
-  } else {
-    validUrl = 'https://' + validUrl;
-  }
-
-  let browser: Browser;
-  try {
-    browser = await getBrowser();
-  } catch (err) {
+    // Offline DNS failure -> fall back to preset without launching Chromium
     const fallback = getPresetPage('wikipedia');
     fallback.url = validUrl;
     fallback.title = `${validUrl} (Modo Fuera de Línea)`;
     return fallback;
   }
 
-  const context = await browser.newContext({
-    viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
-    deviceScaleFactor: 1, // Crucial for Retina pixel alignment
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 MyDestroyDemo/1.0',
-  });
-
-  const page = await context.newPage();
-
+  await acquireScrapeSlot();
   try {
-    // Navigate with reasonable timeout
-    await page.goto(validUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 12000,
+    let browser: Browser;
+    try {
+      browser = await getBrowser();
+    } catch {
+      const fallback = getPresetPage('wikipedia');
+      fallback.url = validUrl;
+      fallback.title = `${validUrl} (Modo Fuera de Línea)`;
+      return fallback;
+    }
+
+    const context = await browser.newContext({
+      viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+      deviceScaleFactor: 1, // Crucial for Retina pixel alignment
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 MyDestroyDemo/1.0',
     });
 
-    // Wait a brief moment for fonts / layout
-    await page.waitForTimeout(600);
-
-    // 1. Remove large fixed/sticky overlays (GDPR cookie banners, modals, dialogs)
-    await page.evaluate(() => {
-      const candidates = document.querySelectorAll<HTMLElement>(
-        '[id*="cookie"], [class*="cookie"], [id*="consent"], [class*="consent"], [role="dialog"], [aria-modal="true"], .modal, .popup'
-      );
-      candidates.forEach(el => {
-        el.style.display = 'none';
-      });
-
-      // Also remove elements with position: fixed/sticky covering > 25% of viewport
-      const all = document.querySelectorAll<HTMLElement>('*');
-      all.forEach(el => {
-        const style = window.getComputedStyle(el);
-        if (style.position === 'fixed' || style.position === 'sticky') {
-          const rect = el.getBoundingClientRect();
-          if (rect.width * rect.height > (1104 * 488) * 0.25) {
-            el.style.display = 'none';
-          }
-        }
-      });
-    });
-
-    // 2. Extract DOM candidate elements for platforms & detachables
-    const rawCandidates: CandidateElement[] = await page.evaluate(() => {
-      const selectors = 'h1, h2, h3, h4, button, a.btn, [role="button"], img, nav, blockquote, pre, table, .card, header, figure';
-      const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
-
-      return nodes.map(node => {
-        const rect = node.getBoundingClientRect();
-        const tag = node.tagName.toLowerCase();
-        const text = (node.textContent || '').trim().replace(/\s+/g, ' ');
-        const isMediaOrControl = tag === 'img' || tag === 'button' || node.getAttribute('role') === 'button';
-
-        return {
-          tag,
-          x: rect.left,
-          y: rect.top,
-          width: rect.width,
-          height: rect.height,
-          text: text.slice(0, 50),
-          isMediaOrControl,
-        };
-      });
-    });
-
-    const platforms = prunePlatforms(rawCandidates);
-    const detachables = extractDetachables(rawCandidates);
-
-    // 3. Extract text runs for dynamic character splitting physics
-    const textRuns: TextRunInput[] = await page.evaluate(() => {
-      const selectors = 'h1, h2, h3, h4, p, a.btn, [role="button"], button';
-      const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
-      const runs: TextRunInput[] = [];
-      let count = 0;
-      for (const node of nodes) {
-        if (count >= 20) break;
-        const rect = node.getBoundingClientRect();
-        if (rect.width < 30 || rect.height < 10) continue;
-        if (rect.bottom > 488 || rect.top < 0 || rect.left < 0 || rect.right > 1104) continue;
-        const style = window.getComputedStyle(node);
-        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.1) continue;
-        const txt = (node.textContent || '').trim().replace(/\s+/g, ' ');
-        if (txt.length < 3) continue;
-
-        runs.push({
-          id: `run-${count++}`,
-          text: txt.slice(0, 80),
-          x: Math.round(rect.left),
-          y: Math.round(rect.top + rect.height * 0.75),
-          fontSize: Math.round(parseFloat(style.fontSize) || 16),
-          fontFamily: style.fontFamily || 'sans-serif',
-          color: style.color || '#202122',
-        });
+    // Block sub-requests and redirects targeting private/local networks or non-http(s) schemes
+    await context.route('**/*', async route => {
+      const reqUrl = route.request().url();
+      if (reqUrl.startsWith('data:') || reqUrl.startsWith('blob:')) {
+        await route.continue();
+        return;
       }
-      return runs;
+      try {
+        const subTarget = validateUrlTarget(reqUrl);
+        await assertPublicHostname(subTarget.hostname);
+        await route.continue();
+      } catch {
+        await route.abort('accessdenied');
+      }
     });
 
-    // 4. Take crisp screenshot at exact 1104x488 viewport
-    const buffer = await page.screenshot({
-      type: 'png',
-      clip: { x: 0, y: 0, width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
-    });
+    const page = await context.newPage();
 
-    const screenshotDataUrl = `data:image/png;base64,${buffer.toString('base64')}`;
-    const title = (await page.title()) || validUrl;
+    try {
+      // Navigate with reasonable timeout
+      await page.goto(validUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 12000,
+      });
 
-    return {
-      url: validUrl,
-      title,
-      screenshot: screenshotDataUrl,
-      width: VIEWPORT_WIDTH,
-      height: VIEWPORT_HEIGHT,
-      platforms,
-      detachables,
-      textRuns,
-    };
-  } catch (err) {
-    // If external network fails or times out, gracefully fall back to Wikipedia preset
-    const fallback = getPresetPage('wikipedia');
-    fallback.url = validUrl;
-    fallback.title = `${validUrl} (Modo Fuera de Línea)`;
-    return fallback;
+      // Wait a brief moment for fonts / layout
+      await page.waitForTimeout(600);
+
+      // 1. Remove large fixed/sticky overlays (GDPR cookie banners, modals, dialogs)
+      await page.evaluate(() => {
+        const candidates = document.querySelectorAll<HTMLElement>(
+          '[id*="cookie"], [class*="cookie"], [id*="consent"], [class*="consent"], [role="dialog"], [aria-modal="true"], .modal, .popup'
+        );
+        candidates.forEach(el => {
+          el.style.display = 'none';
+        });
+
+        // Also remove elements with position: fixed/sticky covering > 25% of viewport
+        const all = document.querySelectorAll<HTMLElement>('*');
+        all.forEach(el => {
+          const style = window.getComputedStyle(el);
+          if (style.position === 'fixed' || style.position === 'sticky') {
+            const rect = el.getBoundingClientRect();
+            if (rect.width * rect.height > (1104 * 488) * 0.25) {
+              el.style.display = 'none';
+            }
+          }
+        });
+      });
+
+      // 2. Extract DOM candidate elements for platforms & detachables
+      const rawCandidates: CandidateElement[] = await page.evaluate(() => {
+        const selectors = 'h1, h2, h3, h4, button, a.btn, [role="button"], img, nav, blockquote, pre, table, .card, header, figure';
+        const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
+
+        return nodes.map(node => {
+          const rect = node.getBoundingClientRect();
+          const tag = node.tagName.toLowerCase();
+          const text = (node.textContent || '').trim().replace(/\s+/g, ' ');
+          const isMediaOrControl = tag === 'img' || tag === 'button' || node.getAttribute('role') === 'button';
+
+          return {
+            tag,
+            x: rect.left,
+            y: rect.top,
+            width: rect.width,
+            height: rect.height,
+            text: text.slice(0, 50),
+            isMediaOrControl,
+          };
+        });
+      });
+
+      const platforms = prunePlatforms(rawCandidates);
+      const detachables = extractDetachables(rawCandidates);
+
+      // 3. Extract text runs for dynamic character splitting physics
+      const textRuns: TextRunInput[] = await page.evaluate(() => {
+        const selectors = 'h1, h2, h3, h4, p, a.btn, [role="button"], button';
+        const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
+        const runs: TextRunInput[] = [];
+        let count = 0;
+        for (const node of nodes) {
+          if (count >= 20) break;
+          const rect = node.getBoundingClientRect();
+          if (rect.width < 30 || rect.height < 10) continue;
+          if (rect.bottom > 488 || rect.top < 0 || rect.left < 0 || rect.right > 1104) continue;
+          const style = window.getComputedStyle(node);
+          if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.1) continue;
+          const txt = (node.textContent || '').trim().replace(/\s+/g, ' ');
+          if (txt.length < 3) continue;
+
+          runs.push({
+            id: `run-${count++}`,
+            text: txt.slice(0, 80),
+            x: Math.round(rect.left),
+            y: Math.round(rect.top + rect.height * 0.75),
+            fontSize: Math.round(parseFloat(style.fontSize) || 16),
+            fontFamily: style.fontFamily || 'sans-serif',
+            color: style.color || '#202122',
+          });
+        }
+        return runs;
+      });
+
+      // 4. Take crisp screenshot at exact 1104x488 viewport
+      const buffer = await page.screenshot({
+        type: 'png',
+        clip: { x: 0, y: 0, width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+      });
+
+      const screenshotDataUrl = `data:image/png;base64,${buffer.toString('base64')}`;
+      const title = (await page.title()) || validUrl;
+
+      const result: ScrapedPageResult = {
+        url: validUrl,
+        title,
+        screenshot: screenshotDataUrl,
+        width: VIEWPORT_WIDTH,
+        height: VIEWPORT_HEIGHT,
+        platforms,
+        detachables,
+        textRuns,
+      };
+      setCachedScrape(validUrl, result);
+      return result;
+    } catch (err) {
+      if (err instanceof SecurityBlockError) {
+        throw err;
+      }
+      // If external network fails or times out, gracefully fall back to Wikipedia preset
+      const fallback = getPresetPage('wikipedia');
+      fallback.url = validUrl;
+      fallback.title = `${validUrl} (Modo Fuera de Línea)`;
+      return fallback;
+    } finally {
+      await context.close();
+    }
   } finally {
-    await context.close();
+    releaseScrapeSlot();
   }
 }

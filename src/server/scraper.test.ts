@@ -3,6 +3,10 @@ import {
   prunePlatforms,
   extractDetachables,
   getPresetPage,
+  isPrivateOrReservedIp,
+  validateUrlTarget,
+  assertPublicHostname,
+  scrapeUrl,
   type CandidateElement,
 } from './scraper';
 
@@ -81,5 +85,52 @@ describe('Scraper platform pruning & detachables extraction', () => {
 
     const demo = getPresetPage('demo');
     expect(demo.platforms.length).toBe(7);
+  });
+
+  it('blocks private, loopback, link-local, metadata, and IPv6 local IP ranges (SSRF protection)', () => {
+    // Blocked private/reserved IPs
+    expect(isPrivateOrReservedIp('127.0.0.1')).toBe(true);
+    expect(isPrivateOrReservedIp('10.0.0.1')).toBe(true);
+    expect(isPrivateOrReservedIp('172.16.0.1')).toBe(true);
+    expect(isPrivateOrReservedIp('172.31.255.255')).toBe(true);
+    expect(isPrivateOrReservedIp('192.168.1.50')).toBe(true);
+    expect(isPrivateOrReservedIp('169.254.169.254')).toBe(true);
+    expect(isPrivateOrReservedIp('0.0.0.0')).toBe(true);
+    expect(isPrivateOrReservedIp('::1')).toBe(true);
+    expect(isPrivateOrReservedIp('::ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateOrReservedIp('fe80::1')).toBe(true);
+    expect(isPrivateOrReservedIp('fc00::1')).toBe(true);
+
+    // Allowed public IPs
+    expect(isPrivateOrReservedIp('8.8.8.8')).toBe(false);
+    expect(isPrivateOrReservedIp('1.1.1.1')).toBe(false);
+    expect(isPrivateOrReservedIp('172.32.0.1')).toBe(false);
+    expect(isPrivateOrReservedIp('2606:4700:4700::1111')).toBe(false);
+  });
+
+  it('rejects non-HTTP protocols, credentials, localhost, and private IP targets in validateUrlTarget', () => {
+    expect(() => validateUrlTarget('ftp://example.com')).toThrow(/protocolos http/i);
+    expect(() => validateUrlTarget('file:///etc/passwd')).toThrow(/protocolos http/i);
+    expect(() => validateUrlTarget('http://user:pass@example.com')).toThrow(/credenciales/i);
+    expect(() => validateUrlTarget('http://localhost:5173')).toThrow(/privadas o locales/i);
+    expect(() => validateUrlTarget('http://127.0.0.1:8080')).toThrow(/privadas o locales/i);
+    expect(() => validateUrlTarget('http://169.254.169.254/latest/meta-data/')).toThrow(/privadas o locales/i);
+    expect(() => validateUrlTarget('http://[::1]:3000')).toThrow(/privadas o locales/i);
+
+    const valid = validateUrlTarget('es.wikipedia.org');
+    expect(valid.href).toBe('https://es.wikipedia.org/');
+  });
+
+  it('detects DNS rebinding to private IPs in assertPublicHostname and scrapeUrl', async () => {
+    await expect(
+      assertPublicHostname('evil-rebind.example.com', async () => [{ address: '127.0.0.1' }])
+    ).rejects.toThrow(/privadas o locales/i);
+
+    await expect(
+      assertPublicHostname('valid.example.com', async () => [{ address: '93.184.216.34' }])
+    ).resolves.toBeUndefined();
+
+    await expect(scrapeUrl('http://127.0.0.1:5173')).rejects.toThrow(/privadas o locales/i);
+    await expect(scrapeUrl('http://localhost:3000')).rejects.toThrow(/privadas o locales/i);
   });
 });
