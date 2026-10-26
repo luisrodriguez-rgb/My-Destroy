@@ -91,6 +91,11 @@ describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
     });
 
     expect(manager.activeSegmentsCount).toBeLessThan(initialSegments);
+
+    // Simulate repair of the platform surface -> all segments should reactivate
+    manager.syncPlatforms(() => true);
+    expect(manager.activeSegmentsCount).toBe(initialSegments);
+
     manager.destroy();
   });
 

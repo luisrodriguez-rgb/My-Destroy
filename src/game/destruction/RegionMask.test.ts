@@ -51,4 +51,18 @@ describe('shared destruction mask', () => {
     expect(second.removed).toHaveLength(0);
     expect(second.dirty.size).toBe(0);
   });
+
+  it('repairs damaged cells, restores solidity, and decreases destruction percentage', () => {
+    const mask = new RegionMask(256, 256);
+    mask.damage(100, 100, 16, 42);
+    expect(mask.solid(100, 100)).toBe(false);
+    const damagedPercent = mask.percent;
+    expect(damagedPercent).toBeGreaterThan(0);
+
+    const repaired = mask.repair(100, 100, 24);
+    expect(repaired.removed.length).toBeGreaterThan(0);
+    expect(mask.solid(100, 100)).toBe(true);
+    expect(mask.percent).toBe(0);
+    expect(mask.removedCount).toBe(0);
+  });
 });

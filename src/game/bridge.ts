@@ -17,6 +17,7 @@ export type SceneControls = {
   preferences(value: Preferences): void;
   focus(): void;
   setWeapon(id: WeaponId): void;
+  setVirtualKey(code: string, down: boolean): void;
   loadCustomPage(data: ScrapedPageResult): Promise<void>;
   loadDemoPage(): void;
 };

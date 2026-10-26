@@ -323,6 +323,25 @@ export class ShotAudio {
     } catch { /* Audio support is optional */ }
   }
 
+  repairPulse() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.exponentialRampToValueAtTime(1040, now + 0.06);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
+      osc.connect(gain).connect(ctx.destination);
+      this.track(osc, () => gain.disconnect());
+      osc.start(now);
+      osc.stop(now + 0.07);
+    } catch { /* Audio support is optional */ }
+  }
+
   private track(source: AudioScheduledSourceNode, cleanup: () => void) {
     this.voices.add(source);
     source.onended = () => { this.voices.delete(source); source.disconnect(); cleanup(); };

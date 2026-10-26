@@ -61,6 +61,8 @@ export class FirstScene extends Phaser.Scene {
   private shotTime = -1000;
   private currentWeaponId: WeaponId = 'pistol';
   private lastLaserPoint: { x: number; y: number } | null = null;
+  private repairTime = -1000;
+  private isRepairing = false;
   private lastShot?: { time: number; flash: number; weapon: WeaponId; tracers: ShotTracer[] };
   private shots = 0;
   private hits = 0;
@@ -238,8 +240,14 @@ export class FirstScene extends Phaser.Scene {
 
     this.input.on('pointermove', (p: Phaser.Input.Pointer) => { this.aim = this.pointerPosition(p); this.inside = true; });
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
-      if (p.button !== 0 || this.paused) return;
-      this.focus(); this.aim = this.pointerPosition(p); this.inside = true; this.shoot();
+      if (this.paused) return;
+      this.focus(); this.aim = this.pointerPosition(p); this.inside = true;
+      if (p.button === 2) {
+        this.repairBeam();
+        return;
+      }
+      if (p.button !== 0) return;
+      this.shoot();
     });
 
     this.events.once('shutdown', () => {
@@ -287,7 +295,7 @@ export class FirstScene extends Phaser.Scene {
     const handled = [
       'KeyA', 'KeyD', 'ArrowLeft', 'ArrowRight', 'KeyW', 'ArrowUp', 'Space', 'KeyS', 'ArrowDown',
       'Digit1', 'Numpad1', 'Digit2', 'Numpad2', 'Digit3', 'Numpad3', 'Digit4', 'Numpad4', 'Digit5', 'Numpad5',
-      'KeyR', 'KeyM', 'Escape',
+      'KeyE', 'KeyR', 'KeyM', 'Escape',
     ];
     if (!handled.includes(event.code)) return;
     event.preventDefault(); this.keys.add(event.code);
@@ -308,6 +316,16 @@ export class FirstScene extends Phaser.Scene {
   private onVisibility = () => { if (document.hidden) this.setPaused(true); };
 
   focus() { this.game.canvas.focus({ preventScroll: true }); }
+  setVirtualKey(code: string, down: boolean) {
+    if (down) {
+      if (!this.keys.has(code) && ['KeyW', 'ArrowUp', 'Space'].includes(code)) {
+        this.controller?.requestJump();
+      }
+      this.keys.add(code);
+    } else {
+      this.keys.delete(code);
+    }
+  }
   setPreferences(value: Preferences) { this.prefs = value; this.audio.setMuted(value.muted); }
   setPaused(value: boolean) { this.paused = value; this.keys.clear(); if (value) { this.audio.stop(); this.lastShot = undefined; } this.notify(); }
   private notify() {
@@ -619,6 +637,18 @@ export class FirstScene extends Phaser.Scene {
     }
     this.audio.shot(hit);
     this.notify();
+  }
+
+  repairBeam() {
+    const now = this.time.now;
+    if (now - this.repairTime < 40) return;
+    this.repairTime = now;
+    const repaired = this.surface.repair(this.aim.x, this.aim.y, 22);
+    if (repaired.removed.length > 0) {
+      this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+      this.audio.repairPulse();
+      this.notify();
+    }
   }
 
   private emitImpact(x: number, y: number, angle: number, radius = 24, fragmentCount = 11) {
@@ -1029,11 +1059,20 @@ export class FirstScene extends Phaser.Scene {
     const angle = Math.atan2(this.aim.y - shoulderY, this.aim.x - this.controller.x);
 
     // Continuous automatic laser firing while holding mouse button down
-    if (this.input.activePointer.isDown && this.currentWeaponId === 'laser' && !this.paused) {
+    if (this.input.activePointer.isDown && this.input.activePointer.button === 0 && this.currentWeaponId === 'laser' && !this.paused) {
       this.aim = this.pointerPosition(this.input.activePointer);
       this.shoot();
     } else {
       this.lastLaserPoint = null;
+    }
+
+    // Continuous Nano-Repair Beam while holding Right Mouse Button or KeyE
+    this.isRepairing = !this.paused && (
+      this.keys.has('KeyE') ||
+      (this.input.activePointer.isDown && this.input.activePointer.button === 2)
+    );
+    if (this.isRepairing) {
+      this.repairBeam();
     }
 
     const w = this.currentWeapon;
@@ -1080,6 +1119,15 @@ export class FirstScene extends Phaser.Scene {
     }
 
     this.effects.clear();
+
+    if (this.isRepairing && !this.prefs.reducedMotion) {
+      const mx = this.controller.x + Math.cos(angle) * 38;
+      const my = shoulderY + Math.sin(angle) * 38;
+      this.effects.lineStyle(5, 0x00f5d4, 0.35).lineBetween(mx, my, this.aim.x, this.aim.y);
+      this.effects.lineStyle(2, 0x79e3d8, 0.9).lineBetween(mx, my, this.aim.x, this.aim.y);
+      this.effects.lineStyle(2, 0x00ff88, 0.85).strokeCircle(this.aim.x, this.aim.y, 22);
+      this.effects.fillStyle(0xffffff, 0.9).fillCircle(this.aim.x, this.aim.y, 4);
+    }
 
     // Draw tracer lines & muzzle flash
     if (this.lastShot && elapsed < this.lastShot.flash && !this.prefs.reducedMotion) {

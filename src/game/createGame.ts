@@ -49,6 +49,7 @@ export function createGame(parent: HTMLElement, prefs: Preferences, callbacks: S
       preferences: (p: Preferences) => scene.setPreferences(p),
       focus: () => scene.focus(),
       setWeapon: (w: WeaponId) => scene.setWeapon(w),
+      setVirtualKey: (code: string, down: boolean) => scene.setVirtualKey(code, down),
       loadCustomPage: (data: ScrapedPageResult) => scene.loadCustomPage(data),
       loadDemoPage: () => scene.loadDemoPage(),
     },

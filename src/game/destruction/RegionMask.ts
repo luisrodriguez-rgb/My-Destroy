@@ -120,5 +120,45 @@ export class RegionMask {
     return result;
   }
 
+  /**
+   * Restores destroyed cells within a circular radius back to solid state (1),
+   * decrementing removedCount and marking affected regions as dirty.
+   */
+  repair(x: number, y: number, radius: number): DamageResult {
+    const result: DamageResult = { removed: [], dirty: new Set() };
+    if (![x, y, radius].every(Number.isFinite) || radius <= 0 || this.removedCount === 0) {
+      return result;
+    }
+
+    const minX = Math.max(0, Math.floor((x - radius) / this.cellSize));
+    const maxX = Math.min(this.columns - 1, Math.floor((x + radius) / this.cellSize));
+    const minY = Math.max(0, Math.floor((y - radius) / this.cellSize));
+    const maxY = Math.min(this.rows - 1, Math.floor((y + radius) / this.cellSize));
+    const radiusSq = radius * radius;
+
+    for (let cy = minY; cy <= maxY; cy++) {
+      const dy = (cy + 0.5) * this.cellSize - y;
+      const rowOffset = cy * this.columns;
+      for (let cx = minX; cx <= maxX; cx++) {
+        const dx = (cx + 0.5) * this.cellSize - x;
+        if (dx * dx + dy * dy > radiusSq) continue;
+        const index = rowOffset + cx;
+        if (this.cells[index] === 1) continue;
+        this.cells[index] = 1;
+        this.removedCount = Math.max(0, this.removedCount - 1);
+        const px = cx * this.cellSize;
+        const py = cy * this.cellSize;
+        result.removed.push({ x: px, y: py });
+        for (const [ox, oy] of [[0, 0], [-4, 0], [4, 0], [0, -4], [0, 4]]) {
+          if (this.contains(px + ox, py + oy)) {
+            result.dirty.add(this.regionAt(px + ox, py + oy));
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
   reset() { this.cells.fill(1); this.removedCount = 0; }
 }

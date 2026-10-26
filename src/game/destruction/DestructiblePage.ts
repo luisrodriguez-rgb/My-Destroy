@@ -33,6 +33,16 @@ export class DestructiblePage {
     return damage;
   }
 
+  repair(x: number, y: number, radius: number, deferRefresh = false): DamageResult {
+    const repaired = this.mask.repair(x - PAPER.x, y - PAPER.y, radius);
+    if (deferRefresh) {
+      repaired.dirty.forEach(index => this.pendingDirty.add(index));
+    } else {
+      repaired.dirty.forEach(index => this.refresh(index));
+    }
+    return repaired;
+  }
+
   flushDirty(): void {
     if (this.pendingDirty.size === 0) return;
     for (const index of this.pendingDirty) {

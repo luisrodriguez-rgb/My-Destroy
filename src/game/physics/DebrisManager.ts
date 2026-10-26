@@ -252,15 +252,15 @@ export class DebrisManager {
   syncPlatforms(isSolid: (x: number, y: number) => boolean): void {
     if (!this.world || !this.isInitialized) return;
     for (const seg of this.platformSegments) {
-      if (!seg.active) continue;
       // Sample 3 points along the thin top edge
       const topY = seg.cy - 1;
       const solidLeft = isSolid(seg.cx - seg.width * 0.35, topY);
       const solidCenter = isSolid(seg.cx, topY);
       const solidRight = isSolid(seg.cx + seg.width * 0.35, topY);
+      const allSolid = solidCenter && solidLeft && solidRight;
 
       // Aggressive deactivation: if any sample point is punctured, dissolve collider
-      if (!solidCenter || !solidLeft || !solidRight) {
+      if (seg.active && !allSolid) {
         this.world.removeCollider(seg.collider, true);
         seg.active = false;
         // Wake up resting debris and apply a downward push
@@ -271,6 +271,13 @@ export class DebrisManager {
             piece.body.applyImpulse({ x: (Math.random() - 0.5) * 12, y: 16 }, true);
           }
         }
+      } else if (!seg.active && allSolid) {
+        // Reactivate collider when platform surface is repaired
+        const pCol = RAPIER.ColliderDesc.cuboid(seg.width / 2, 2.0);
+        pCol.setFriction(0.8);
+        pCol.setRestitution(0.2);
+        seg.collider = this.world.createCollider(pCol, seg.body);
+        seg.active = true;
       }
     }
   }
