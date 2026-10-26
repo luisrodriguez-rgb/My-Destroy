@@ -74,5 +74,51 @@ export class RegionMask {
     return result;
   }
 
+  /**
+   * Directly clears a rectangular area in paper coordinates without trigonometric
+   * per-cell overhead. Used when detaching DOM blocks or individual characters.
+   */
+  clearRect(x: number, y: number, width: number, height: number): DamageResult {
+    const result: DamageResult = { removed: [], dirty: new Set() };
+    if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+      return result;
+    }
+
+    const minX = Math.max(0, Math.floor(x / this.cellSize));
+    const maxX = Math.min(this.columns - 1, Math.floor((x + width - 0.001) / this.cellSize));
+    const minY = Math.max(0, Math.floor(y / this.cellSize));
+    const maxY = Math.min(this.rows - 1, Math.floor((y + height - 0.001) / this.cellSize));
+
+    if (minX > maxX || minY > maxY) return result;
+
+    for (let cy = minY; cy <= maxY; cy++) {
+      const rowOffset = cy * this.columns;
+      const py = cy * this.cellSize;
+      for (let cx = minX; cx <= maxX; cx++) {
+        const index = rowOffset + cx;
+        if (!this.cells[index]) continue;
+        this.cells[index] = 0;
+        this.removedCount++;
+        result.removed.push({ x: cx * this.cellSize, y: py });
+      }
+    }
+
+    if (result.removed.length > 0) {
+      const margin = 4;
+      const startRx = Math.floor(Math.max(0, x - margin) / this.regionSize);
+      const endRx = Math.floor(Math.min(this.width - 1, x + width + margin) / this.regionSize);
+      const startRy = Math.floor(Math.max(0, y - margin) / this.regionSize);
+      const endRy = Math.floor(Math.min(this.height - 1, y + height + margin) / this.regionSize);
+
+      for (let ry = startRy; ry <= endRy; ry++) {
+        for (let rx = startRx; rx <= endRx; rx++) {
+          result.dirty.add(ry * this.regionColumns + rx);
+        }
+      }
+    }
+
+    return result;
+  }
+
   reset() { this.cells.fill(1); this.removedCount = 0; }
 }

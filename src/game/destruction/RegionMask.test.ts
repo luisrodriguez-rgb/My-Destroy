@@ -37,4 +37,18 @@ describe('shared destruction mask', () => {
     expect(mask.damage(200,200,10,1).removed).toHaveLength(0);
     expect(mask.percent).toBe(0);
   });
+
+  it('clears rectangular areas directly in O(cells) without double counting', () => {
+    const mask = new RegionMask(256, 256);
+    const first = mask.clearRect(120, 120, 20, 16);
+    expect(first.removed.length).toBe(10 * 8);
+    expect(mask.solid(124, 124)).toBe(false);
+    expect(mask.solid(118, 124)).toBe(true);
+    expect([...first.dirty].sort()).toEqual([0, 1, 2, 3]);
+
+    // Clearing same area again removes 0 cells
+    const second = mask.clearRect(120, 120, 20, 16);
+    expect(second.removed).toHaveLength(0);
+    expect(second.dirty.size).toBe(0);
+  });
 });

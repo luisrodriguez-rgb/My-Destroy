@@ -8,6 +8,7 @@ export class DestructiblePage {
   readonly original = drawDemoPage();
   readonly regions: { x: number; y: number; texture: Phaser.Textures.CanvasTexture }[] = [];
   readonly source: Phaser.Textures.CanvasTexture;
+  private readonly pendingDirty = new Set<number>();
 
   constructor(scene: Phaser.Scene) {
     this.source = scene.textures.addCanvas('paper-source', this.original)!;
@@ -22,10 +23,24 @@ export class DestructiblePage {
 
   hit(x: number, y: number) { return this.mask.solid(x - PAPER.x, y - PAPER.y); }
 
-  damage(x: number, y: number, radius: number, seed: number): DamageResult {
+  damage(x: number, y: number, radius: number, seed: number, deferRefresh = false): DamageResult {
     const damage = this.mask.damage(x - PAPER.x, y - PAPER.y, radius, seed);
-    damage.dirty.forEach(index => this.refresh(index));
+    if (deferRefresh) {
+      damage.dirty.forEach(index => this.pendingDirty.add(index));
+    } else {
+      damage.dirty.forEach(index => this.refresh(index));
+    }
     return damage;
+  }
+
+  flushDirty(): void {
+    if (this.pendingDirty.size === 0) return;
+    for (const index of this.pendingDirty) {
+      if (index >= 0 && index < this.regions.length) {
+        this.refresh(index);
+      }
+    }
+    this.pendingDirty.clear();
   }
 
   refresh(index: number) {
@@ -34,38 +49,50 @@ export class DestructiblePage {
     ctx.clearRect(0, 0, texture.width, texture.height);
     ctx.drawImage(this.original, -x, -y);
     const step = this.mask.cellSize;
-    const step2 = step * 2;
-    for (let py = y; py < y + texture.height; py += step) {
-      for (let px = x; px < x + texture.width; px += step) {
-        if (!this.mask.solid(px, py)) {
-          ctx.clearRect(px - x, py - y, step, step);
+    const cols = this.mask.columns;
+    const rows = this.mask.rows;
+    const cells = this.mask.cells;
+    const startCx = x / step;
+    const endCx = (x + texture.width) / step;
+    const startCy = y / step;
+    const endCy = (y + texture.height) / step;
+
+    for (let cy = startCy; cy < endCy; cy++) {
+      const py = cy * step;
+      const localY = py - y;
+      const rowOffset = cy * cols;
+      for (let cx = startCx; cx < endCx; cx++) {
+        const px = cx * step;
+        const localX = px - x;
+        if (cells[rowOffset + cx] === 0) {
+          ctx.clearRect(localX, localY, step, step);
         } else {
           // Direct border: intense dark carbon charring
-          const hasEmptyDirect = (
-            (!this.mask.contains(px - step, py) || !this.mask.solid(px - step, py)) ||
-            (!this.mask.contains(px + step, py) || !this.mask.solid(px + step, py)) ||
-            (!this.mask.contains(px, py - step) || !this.mask.solid(px, py - step)) ||
-            (!this.mask.contains(px, py + step) || !this.mask.solid(px, py + step))
-          );
+          const hasEmptyDirect =
+            cx === 0 || cells[rowOffset + cx - 1] === 0 ||
+            cx + 1 >= cols || cells[rowOffset + cx + 1] === 0 ||
+            cy === 0 || cells[rowOffset - cols + cx] === 0 ||
+            cy + 1 >= rows || cells[rowOffset + cols + cx] === 0;
+
           if (hasEmptyDirect) {
             ctx.fillStyle = '#17110dee';
-            ctx.fillRect(px - x, py - y, step, step);
+            ctx.fillRect(localX, localY, step, step);
             // Incandescent hot ember micro-speck (deterministic from position hash)
             if (((px * 19 + py * 31) & 15) === 0) {
               ctx.fillStyle = '#ff6b00ee';
-              ctx.fillRect(px - x, py - y, step, step);
+              ctx.fillRect(localX, localY, step, step);
             }
           } else {
             // Secondary halo: burnt umber dither
-            const hasEmptyNear = (
-              (!this.mask.contains(px - step2, py) || !this.mask.solid(px - step2, py)) ||
-              (!this.mask.contains(px + step2, py) || !this.mask.solid(px + step2, py)) ||
-              (!this.mask.contains(px, py - step2) || !this.mask.solid(px, py - step2)) ||
-              (!this.mask.contains(px, py + step2) || !this.mask.solid(px, py + step2))
-            );
+            const hasEmptyNear =
+              cx < 2 || cells[rowOffset + cx - 2] === 0 ||
+              cx + 2 >= cols || cells[rowOffset + cx + 2] === 0 ||
+              cy < 2 || cells[rowOffset - cols * 2 + cx] === 0 ||
+              cy + 2 >= rows || cells[rowOffset + cols * 2 + cx] === 0;
+
             if (hasEmptyNear && ((px + py) & 2) === 0) {
               ctx.fillStyle = '#3c241566';
-              ctx.fillRect(px - x, py - y, step, step);
+              ctx.fillRect(localX, localY, step, step);
             }
           }
         }
@@ -82,32 +109,22 @@ export class DestructiblePage {
     this.reset();
   }
 
-  clearArea(x: number, y: number, width: number, height: number): void {
-    const cellSize = this.mask.cellSize;
-    for (let py = y; py < y + height; py += cellSize) {
-      for (let px = x; px < x + width; px += cellSize) {
-        if (this.mask.contains(px, py)) {
-          this.mask.damage(px, py, cellSize, 0);
+  clearArea(x: number, y: number, width: number, height: number, deferRefresh = false): void {
+    const damage = this.mask.clearRect(x, y, width, height);
+    if (deferRefresh) {
+      damage.dirty.forEach(index => this.pendingDirty.add(index));
+    } else {
+      damage.dirty.forEach(index => {
+        if (index >= 0 && index < this.regions.length) {
+          this.refresh(index);
         }
-      }
-    }
-
-    const size = this.mask.regionSize;
-    const startX = Math.floor(Math.max(0, x) / size);
-    const endX = Math.floor(Math.min(PAPER.width - 1, x + width) / size);
-    const startY = Math.floor(Math.max(0, y) / size);
-    const endY = Math.floor(Math.min(PAPER.height - 1, y + height) / size);
-    const cols = Math.ceil(PAPER.width / size);
-
-    for (let ry = startY; ry <= endY; ry++) {
-      for (let rx = startX; rx <= endX; rx++) {
-        const idx = ry * cols + rx;
-        if (idx >= 0 && idx < this.regions.length) {
-          this.refresh(idx);
-        }
-      }
+      });
     }
   }
 
-  reset() { this.mask.reset(); this.regions.forEach((_, i) => this.refresh(i)); }
+  reset() {
+    this.pendingDirty.clear();
+    this.mask.reset();
+    this.regions.forEach((_, i) => this.refresh(i));
+  }
 }

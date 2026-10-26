@@ -436,14 +436,16 @@ export class FirstScene extends Phaser.Scene {
         tracers.push({ mx, my, x: tx, y: ty, hit });
 
         if (hit) {
-          const result = this.surface.damage(tx, ty, weapon.radius, this.shots * 5.1 + idx);
+          const result = this.surface.damage(tx, ty, weapon.radius, this.shots * 5.1 + idx, true);
           if (result.removed.length) {
             this.emitImpact(tx, ty, pAngle, weapon.radius, 4);
             this.debrisManager?.applyBlastImpulse(tx, ty, weapon.radius * 1.2, 140);
-            this.checkTextSplits(tx, ty, weapon.radius);
+            this.checkTextSplits(tx, ty, weapon.radius, true);
           }
         }
       });
+
+      this.surface.flushDirty();
 
       if (anyHit) {
         this.hits++;
@@ -494,6 +496,7 @@ export class FirstScene extends Phaser.Scene {
       const steps = Math.max(1, Math.ceil(dist / 5));
 
       let anyHit = false;
+      let lastHitPoint: { x: number; y: number } | null = null;
       for (let s = 0; s <= steps; s++) {
         const t = steps === 0 ? 1 : s / steps;
         const curX = fromX + (toX - fromX) * t;
@@ -501,14 +504,19 @@ export class FirstScene extends Phaser.Scene {
         const hit = this.surface.hit(curX, curY);
         if (hit) {
           anyHit = true;
-          const result = this.surface.damage(curX, curY, weapon.radius, this.shots * 1.77 + s);
+          const result = this.surface.damage(curX, curY, weapon.radius, this.shots * 1.77 + s, true);
           if (result.removed.length) {
-            this.emitImpact(curX, curY, baseAngle, weapon.radius, weapon.fragments);
+            lastHitPoint = { x: curX, y: curY };
             this.debrisManager?.applyBlastImpulse(curX, curY, weapon.radius * 1.1, 75);
-            this.checkTextSplits(curX, curY, weapon.radius);
+            this.checkTextSplits(curX, curY, weapon.radius, true);
           }
         }
       }
+
+      if (lastHitPoint) {
+        this.emitImpact(lastHitPoint.x, lastHitPoint.y, baseAngle, weapon.radius, weapon.fragments);
+      }
+      this.surface.flushDirty();
 
       this.lastLaserPoint = { x: toX, y: toY };
 
@@ -683,13 +691,14 @@ export class FirstScene extends Phaser.Scene {
     this.emitImpact(d.worldX + d.width / 2, d.worldY + d.height / 2, -Math.PI / 2, Math.min(d.width, d.height) * 0.4, 6);
   }
 
-  private checkTextSplits(blastX: number, blastY: number, radius: number): void {
+  private checkTextSplits(blastX: number, blastY: number, radius: number, deferFlush = false): void {
     if (!this.domTextManager || !this.debrisManager) return;
     const detached = this.domTextManager.splitOnImpact(blastX, blastY, radius, 14);
+    if (detached.length === 0) return;
     for (const item of detached) {
       const ch = item.char;
       // Clear character area on paper so no ghost character remains
-      this.surface.clearArea(ch.paperX, ch.paperY, ch.width, ch.height);
+      this.surface.clearArea(ch.paperX, ch.paperY, ch.width, ch.height, true);
 
       const frameKey = `text-${ch.id}-${this.serial++}`;
       this.debrisManager.spawnLetterDebris(
@@ -708,6 +717,9 @@ export class FirstScene extends Phaser.Scene {
         item.radialAngle,
         180
       );
+    }
+    if (!deferFlush) {
+      this.surface.flushDirty();
     }
   }
 
