@@ -1,11 +1,13 @@
-import { chromium, type Browser } from '@playwright/test';
+import { chromium, type Browser, type Page } from '@playwright/test';
 import type { TextRunInput } from '../game/text/DOMTextManager';
+import { PAPER } from '../game/tuning';
+import { foldCount, paperHeightFor } from '../game/pageExtent';
 
 export interface ScrapedPlatform {
   id: string;
   name: string;
   x: number;      // relative to paper coordinates (0..1104)
-  y: number;      // relative to paper coordinates (0..488)
+  y: number;      // relative to paper coordinates (0..page height)
   width: number;
   height: number;
   tag: string;
@@ -14,7 +16,7 @@ export interface ScrapedPlatform {
 export interface ScrapedDetachable {
   id: string;
   x: number;      // relative to paper coordinates (0..1104)
-  y: number;      // relative to paper coordinates (0..488)
+  y: number;      // relative to paper coordinates (0..page height)
   width: number;
   height: number;
   tag: string;
@@ -25,7 +27,7 @@ export interface ScrapedPageResult {
   title: string;
   screenshot: string; // base64 data URL
   width: number;      // 1104
-  height: number;     // 488
+  height: number;     // 488 for one fold, up to 1952
   platforms: ScrapedPlatform[];
   detachables: ScrapedDetachable[];
   textRuns?: TextRunInput[];
@@ -41,8 +43,8 @@ export interface CandidateElement {
   isMediaOrControl?: boolean;
 }
 
-const VIEWPORT_WIDTH = 1104;
-const VIEWPORT_HEIGHT = 488;
+const VIEWPORT_WIDTH = PAPER.width;
+const VIEWPORT_HEIGHT = PAPER.height;
 const MIN_VERTICAL_GAP = 42;
 const MAX_PLATFORMS = 14;
 const MAX_DETACHABLES = 8;
@@ -300,6 +302,27 @@ export async function getBrowser(): Promise<Browser> {
   return browserInstance;
 }
 
+async function capturePagePng(page: Page, height: number): Promise<string> {
+  if (height <= VIEWPORT_HEIGHT) {
+    const buffer = await page.screenshot({
+      type: 'png',
+      clip: { x: 0, y: 0, width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+    });
+    return buffer.toString('base64');
+  }
+  const session = await page.context().newCDPSession(page);
+  try {
+    const result = await session.send('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: VIEWPORT_WIDTH, height, scale: 1 },
+    }) as { data: string };
+    return result.data;
+  } finally {
+    await session.detach();
+  }
+}
+
 export async function closeBrowser(): Promise<void> {
   if (browserInstance) {
     await browserInstance.close();
@@ -313,7 +336,9 @@ export async function closeBrowser(): Promise<void> {
  * vertical clearance of at least 42px for horizontally overlapping platforms,
  * and caps output at MAX_PLATFORMS.
  */
-export function prunePlatforms(candidates: CandidateElement[]): ScrapedPlatform[] {
+export function prunePlatforms(candidates: CandidateElement[], pageHeight = VIEWPORT_HEIGHT): ScrapedPlatform[] {
+  const boundsHeight = paperHeightFor(pageHeight);
+  const limit = MAX_PLATFORMS * foldCount(pageHeight);
   // 1. Filter candidates within bounds
   const valid = candidates.filter(c => {
     return (
@@ -324,7 +349,7 @@ export function prunePlatforms(candidates: CandidateElement[]): ScrapedPlatform[
       c.x >= 0 &&
       c.x + c.width <= VIEWPORT_WIDTH &&
       c.y >= 0 &&
-      c.y + c.height <= VIEWPORT_HEIGHT
+      c.y + c.height <= boundsHeight
     );
   });
 
@@ -334,7 +359,7 @@ export function prunePlatforms(candidates: CandidateElement[]): ScrapedPlatform[
   const accepted: ScrapedPlatform[] = [];
 
   for (let i = 0; i < valid.length; i++) {
-    if (accepted.length >= MAX_PLATFORMS) break;
+    if (accepted.length >= limit) break;
 
     const cand = valid[i];
     const candRight = cand.x + cand.width;
@@ -373,7 +398,9 @@ export function prunePlatforms(candidates: CandidateElement[]): ScrapedPlatform[
 /**
  * Extracts prominent visual blocks (images, buttons, cards) to act as detachable physical bodies.
  */
-export function extractDetachables(candidates: CandidateElement[]): ScrapedDetachable[] {
+export function extractDetachables(candidates: CandidateElement[], pageHeight = VIEWPORT_HEIGHT): ScrapedDetachable[] {
+  const boundsHeight = paperHeightFor(pageHeight);
+  const limit = MAX_DETACHABLES * foldCount(pageHeight);
   const eligible = candidates.filter(c => {
     const isDetachableTag = ['img', 'button', 'a', 'header', 'nav', 'figure'].includes(c.tag) || c.isMediaOrControl;
     return (
@@ -385,14 +412,14 @@ export function extractDetachables(candidates: CandidateElement[]): ScrapedDetac
       c.x >= 10 &&
       c.x + c.width <= VIEWPORT_WIDTH - 10 &&
       c.y >= 10 &&
-      c.y + c.height <= VIEWPORT_HEIGHT - 10
+      c.y + c.height <= boundsHeight - 10
     );
   });
 
   // Sort by prominence (area)
   eligible.sort((a, b) => b.width * b.height - a.width * a.height);
 
-  return eligible.slice(0, MAX_DETACHABLES).map((item, idx) => ({
+  return eligible.slice(0, limit).map((item, idx) => ({
     id: `detach-${idx + 1}`,
     x: Math.round(item.x),
     y: Math.round(item.y),
@@ -507,8 +534,8 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
 
 /**
  * Scrapes any real live URL via headless Playwright, cleans cookie overlays,
- * captures screenshot at exactly 1104x488 with deviceScaleFactor=1,
- * and extracts pruned platforms and detachables.
+ * captures the first fold at 1104×488, and pages below that fold up to four viewports (1104×1952),
+ * with deviceScaleFactor=1, and extracts pruned platforms and detachables.
  */
 export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
   const normalized = targetUrl.trim();
@@ -614,6 +641,15 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
         });
       });
 
+      // The browser viewport stays one fold so 100vh pages do not stretch. Content below it is captured in place.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const contentHeight = await page.evaluate(() => {
+        const root = document.scrollingElement || document.documentElement;
+        const body = document.body;
+        return Math.max(root?.scrollHeight ?? 0, body?.scrollHeight ?? 0);
+      });
+      const captureHeight = paperHeightFor(contentHeight);
+
       // 2. Extract DOM candidate elements for platforms & detachables
       const rawCandidates: CandidateElement[] = await page.evaluate(() => {
         const selectors = 'h1, h2, h3, h4, button, a.btn, [role="button"], img, nav, blockquote, pre, table, .card, header, figure';
@@ -627,8 +663,8 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
 
           return {
             tag,
-            x: rect.left,
-            y: rect.top,
+            x: rect.left + window.scrollX,
+            y: rect.top + window.scrollY,
             width: rect.width,
             height: rect.height,
             text: text.slice(0, 50),
@@ -637,20 +673,24 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
         });
       });
 
-      const platforms = prunePlatforms(rawCandidates);
-      const detachables = extractDetachables(rawCandidates);
+      const platforms = prunePlatforms(rawCandidates, captureHeight);
+      const detachables = extractDetachables(rawCandidates, captureHeight);
 
       // 3. Extract text runs for dynamic character splitting physics
-      const textRuns: TextRunInput[] = await page.evaluate(() => {
+      const textRuns: TextRunInput[] = await page.evaluate(({ pageWidth, pageHeight, maxRuns }) => {
         const selectors = 'h1, h2, h3, h4, p, a.btn, [role="button"], button';
         const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
         const runs: TextRunInput[] = [];
         let count = 0;
         for (const node of nodes) {
-          if (count >= 20) break;
+          if (count >= maxRuns) break;
           const rect = node.getBoundingClientRect();
           if (rect.width < 30 || rect.height < 10) continue;
-          if (rect.bottom > 488 || rect.top < 0 || rect.left < 0 || rect.right > 1104) continue;
+          const top = rect.top + window.scrollY;
+          const left = rect.left + window.scrollX;
+          const bottom = top + rect.height;
+          const right = left + rect.width;
+          if (bottom > pageHeight || top < 0 || left < 0 || right > pageWidth) continue;
           const style = window.getComputedStyle(node);
           if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.1) continue;
           const txt = (node.textContent || '').trim().replace(/\s+/g, ' ');
@@ -659,23 +699,18 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
           runs.push({
             id: `run-${count++}`,
             text: txt.slice(0, 80),
-            x: Math.round(rect.left),
-            y: Math.round(rect.top + rect.height * 0.75),
+            x: Math.round(left),
+            y: Math.round(top + rect.height * 0.75),
             fontSize: Math.round(parseFloat(style.fontSize) || 16),
             fontFamily: style.fontFamily || 'sans-serif',
             color: style.color || '#202122',
           });
         }
         return runs;
-      });
+      }, { pageWidth: VIEWPORT_WIDTH, pageHeight: captureHeight, maxRuns: 20 * foldCount(captureHeight) });
 
-      // 4. Take crisp screenshot at exact 1104x488 viewport
-      const buffer = await page.screenshot({
-        type: 'png',
-        clip: { x: 0, y: 0, width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
-      });
-
-      const screenshotDataUrl = `data:image/png;base64,${buffer.toString('base64')}`;
+      // 4. One fold stays a viewport screenshot. Taller pages are clipped from the document, up to four folds.
+      const screenshotDataUrl = `data:image/png;base64,${await capturePagePng(page, captureHeight)}`;
       const title = (await page.title()) || validUrl;
 
       const result: ScrapedPageResult = {
@@ -683,7 +718,7 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
         title,
         screenshot: screenshotDataUrl,
         width: VIEWPORT_WIDTH,
-        height: VIEWPORT_HEIGHT,
+        height: captureHeight,
         platforms,
         detachables,
         textRuns,

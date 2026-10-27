@@ -1,24 +1,61 @@
 import * as Phaser from 'phaser';
 import { RegionMask, type DamageResult } from './RegionMask';
 import { PAPER } from '../tuning';
+import { paperHeightFor } from '../pageExtent';
 import { drawDemoPage } from '../fixtures/demoPage';
 
 export class DestructiblePage {
-  readonly mask = new RegionMask(PAPER.width, PAPER.height);
-  readonly original = drawDemoPage();
+  mask: RegionMask;
+  original: HTMLCanvasElement;
   readonly regions: { x: number; y: number; texture: Phaser.Textures.CanvasTexture }[] = [];
-  readonly source: Phaser.Textures.CanvasTexture;
+  source: Phaser.Textures.CanvasTexture;
   private readonly pendingDirty = new Set<number>();
+  private readonly regionImages: Phaser.GameObjects.Image[] = [];
 
-  constructor(scene: Phaser.Scene) {
+  constructor(private scene: Phaser.Scene) {
+    this.original = drawDemoPage();
+    this.mask = new RegionMask(PAPER.width, PAPER.height);
     this.source = scene.textures.addCanvas('paper-source', this.original)!;
+    this.buildRegions();
+  }
+
+  /** Rebuild the mask when a captured page is taller than the current fold. One fold is a no-op. */
+  setPageHeight(height: number) {
+    const next = paperHeightFor(height);
+    if (next === this.mask.height) return;
+    this.destroyRegions();
+    const canvas = document.createElement('canvas');
+    canvas.width = PAPER.width;
+    canvas.height = next;
+    this.original = canvas;
+    if (this.scene.textures.exists('paper-source')) this.scene.textures.remove('paper-source');
+    this.source = this.scene.textures.addCanvas('paper-source', canvas)!;
+    this.mask = new RegionMask(PAPER.width, next);
+    this.pendingDirty.clear();
+    this.buildRegions();
+  }
+
+  private buildRegions() {
     const size = this.mask.regionSize;
-    for (let y = 0; y < PAPER.height; y += size) for (let x = 0; x < PAPER.width; x += size) {
-      const texture = scene.textures.createCanvas(`paper-${x}-${y}`, Math.min(size, PAPER.width - x), Math.min(size, PAPER.height - y))!;
+    for (let y = 0; y < this.mask.height; y += size) for (let x = 0; x < PAPER.width; x += size) {
+      const key = `paper-${x}-${y}`;
+      if (this.scene.textures.exists(key)) this.scene.textures.remove(key);
+      const texture = this.scene.textures.createCanvas(key, Math.min(size, PAPER.width - x), Math.min(size, this.mask.height - y))!;
       this.regions.push({ x, y, texture });
-      scene.add.image(PAPER.x + x, PAPER.y + y, texture.key).setOrigin(0).setDepth(10);
+      const image = this.scene.add.image(PAPER.x + x, PAPER.y + y, texture.key).setOrigin(0).setDepth(10);
+      this.regionImages.push(image);
       this.refresh(this.regions.length - 1);
     }
+  }
+
+  private destroyRegions() {
+    for (const image of this.regionImages) image.destroy();
+    this.regionImages.length = 0;
+    for (const region of this.regions) {
+      const key = region.texture.key;
+      if (this.scene.textures.exists(key)) this.scene.textures.remove(key);
+    }
+    this.regions.length = 0;
   }
 
   hit(x: number, y: number) { return this.mask.solid(x - PAPER.x, y - PAPER.y); }
@@ -113,8 +150,8 @@ export class DestructiblePage {
 
   loadPage(image: HTMLCanvasElement | HTMLImageElement) {
     const ctx = this.original.getContext('2d')!;
-    ctx.clearRect(0, 0, PAPER.width, PAPER.height);
-    ctx.drawImage(image, 0, 0, PAPER.width, PAPER.height);
+    ctx.clearRect(0, 0, this.mask.width, this.mask.height);
+    ctx.drawImage(image, 0, 0, this.mask.width, this.mask.height);
     this.source.refresh();
     this.reset();
   }

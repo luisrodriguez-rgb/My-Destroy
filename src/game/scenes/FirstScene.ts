@@ -2,6 +2,7 @@ import * as Phaser from 'phaser';
 import { DestructiblePage } from '../destruction/DestructiblePage';
 import { ShotAudio } from '../audio/ShotAudio';
 import { COLORS, PAPER, WORLD } from '../tuning';
+import { clampCameraY, paperHeightFor, worldForPaper } from '../pageExtent';
 import type { Preferences, SceneCallbacks, WeaponId } from '../bridge';
 import { screenToWorld } from '../coordinates';
 import { PlatformController } from '../physics/PlatformController';
@@ -70,9 +71,14 @@ export class FirstScene extends Phaser.Scene {
   private resets = 0;
   private paused = false;
   private phase = 0;
+  private layout = worldForPaper(PAPER.height);
+  private worldGraphics!: Phaser.GameObjects.Graphics;
+  private floorMark!: Phaser.GameObjects.Text;
+  private floorStatus!: Phaser.GameObjects.Text;
+  private debrisMaskGraphics!: Phaser.GameObjects.Graphics;
 
   get playerX() { return this.controller ? this.controller.x : 350; }
-  get playerY() { return this.controller ? this.controller.y : WORLD.floor - 4; }
+  get playerY() { return this.controller ? this.controller.y : this.layout.floor - 4; }
   get currentWeapon(): WeaponConfig { return WEAPONS[this.currentWeaponId as WeaponId]; }
 
   constructor(private prefs: Preferences, private callbacks: SceneCallbacks) { super('FirstScene'); }
@@ -83,20 +89,20 @@ export class FirstScene extends Phaser.Scene {
     this.buildWorld();
     this.surface = new DestructiblePage(this);
     this.controller = new PlatformController({
-      floorY: WORLD.floor - 4,
+      floorY: this.layout.floor - 4,
       worldBounds: { minX: 48, maxX: 1104 },
       platforms: this.currentPlatforms,
       isSolid: (x, y) => this.surface.hit(x, y),
-    }, 350, WORLD.floor - 4);
+    }, 350, this.layout.floor - 4);
     this.buildPlayer();
     this.effects = this.add.graphics().setDepth(50);
     this.reticle = this.add.graphics().setDepth(60);
     this.audio.setMuted(this.prefs.muted);
 
     this.debrisLayer = this.add.container(0, 0).setDepth(26);
-    const debrisMaskGraphics = this.make.graphics();
-    debrisMaskGraphics.fillStyle(0xffffff).fillRect(0, 0, WORLD.width, 530);
-    this.debrisLayer.setMask(debrisMaskGraphics.createGeometryMask());
+    this.debrisMaskGraphics = this.make.graphics();
+    this.paintDebrisMask();
+    this.debrisLayer.setMask(this.debrisMaskGraphics.createGeometryMask());
 
     const ATLAS_COLS = 16;
     const ATLAS_SLOT = 64;
@@ -286,7 +292,19 @@ export class FirstScene extends Phaser.Scene {
   private pointerPosition(pointer: Phaser.Input.Pointer) {
     const event = pointer.event as MouseEvent & { changedTouches?: TouchList };
     const point = event.changedTouches?.[0] ?? event;
-    return screenToWorld(point.clientX, point.clientY, this.game.canvas.getBoundingClientRect());
+    const camera = this.cameras.main;
+    return screenToWorld(point.clientX, point.clientY, this.game.canvas.getBoundingClientRect(), {
+      scrollX: camera.scrollX,
+      scrollY: camera.scrollY,
+    });
+  }
+
+  private refreshAim() {
+    if (!this.inside || !this.input.activePointer?.event) return;
+    const event = this.input.activePointer.event as MouseEvent & { changedTouches?: TouchList };
+    const point = event.changedTouches?.[0] ?? event;
+    if (!Number.isFinite(point.clientX) || !Number.isFinite(point.clientY)) return;
+    this.aim = this.pointerPosition(this.input.activePointer);
   }
   private onLeave = () => { this.inside = false; this.keys.clear(); };
   private onContextMenu = (event: Event) => event.preventDefault();
@@ -339,15 +357,93 @@ export class FirstScene extends Phaser.Scene {
     });
   }
 
+  private applyPageExtent(paperHeight: number) {
+    const next = worldForPaper(paperHeight);
+    const changed = next.paperHeight !== this.layout.paperHeight;
+    this.layout = next;
+    if (changed) {
+      this.surface?.setPageHeight(next.paperHeight);
+      if (this.worldGraphics) this.paintWorld();
+      const labelY = next.floor - 4 + 33;
+      this.floorMark?.setPosition(28, labelY);
+      this.floorStatus?.setPosition(1002, labelY);
+      this.paintDebrisMask();
+      this.cameras.main.setBounds(0, 0, next.width, next.height);
+    }
+    this.controller?.setFloor(next.floor - 4);
+    this.debrisManager?.setWorldExtent(next.height, next.floor - 4, next.paperHeight);
+    this.syncCamera();
+  }
+
+  private paintDebrisMask() {
+    if (!this.debrisMaskGraphics) return;
+    this.debrisMaskGraphics.clear();
+    this.debrisMaskGraphics.fillStyle(0xffffff).fillRect(0, 0, WORLD.width, this.layout.floor - 4);
+  }
+
+  private syncCamera() {
+    if (!this.controller) return;
+    const maxScroll = Math.max(0, this.layout.height - WORLD.height);
+    const scrollY = Math.round(clampCameraY(this.controller.y, this.layout.height, WORLD.height));
+    this.cameras.main.setScroll(0, Math.min(maxScroll, Math.max(0, scrollY)));
+  }
+
   private buildWorld() {
     this.cameras.main.setBackgroundColor('#081017');
-    const g = this.add.graphics();
+    this.cameras.main.setBounds(0, 0, this.layout.width, this.layout.height);
+    this.worldGraphics = this.add.graphics();
+    this.paintWorld();
+
+    // High-visibility machinery sprites from industrial tileset
+    for (const [x, y, frame] of [
+      [747, 222, 267], [1044, 353, 268], [400, 329, 287], [109, 90, 267],
+      [230, 260, 287], [630, 300, 267], [920, 260, 285],
+    ]) {
+      this.add.image(x, y, 'industrial', frame).setScale(3).setTint(0x00f5d4).setAlpha(0.85);
+    }
+
+    // Illuminated industrial signage
+    this.add.text(760, 426, 'CORE REACTOR // SUB-LEVEL 01', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#00f5d4',
+      letterSpacing: 3,
+    });
+    this.add.text(760, 444, 'CONTAINMENT GRID • NOMINAL', {
+      fontFamily: 'monospace',
+      fontSize: '9px',
+      color: '#ffb454',
+      letterSpacing: 2,
+    });
+
+    const labelY = this.layout.floor - 4 + 33;
+    this.floorMark = this.add.text(28, labelY, 'SECTOR 01  /  CÁMARA DE PRUEBAS', { fontFamily: 'monospace', fontSize: '9px', color: '#647c89', letterSpacing: 2 });
+    this.floorStatus = this.add.text(1002, labelY, 'CORE • ONLINE', { fontFamily: 'monospace', fontSize: '9px', color: '#00f5d4' });
+  }
+
+  private paintWorld() {
+    const g = this.worldGraphics;
+    g.clear();
+    const paperHeight = this.layout.paperHeight;
+    const floorTop = this.layout.floor - 4;
+    const columnHeight = floorTop - 20;
+    const girderYs = [138, 388];
+    if (paperHeight > PAPER.height) {
+      const folds = Math.ceil(paperHeight / PAPER.height);
+      for (let fold = 1; fold < folds; fold++) {
+        for (const base of [138, 388]) {
+          const y = base + fold * PAPER.height;
+          if (y < floorTop - 30) girderYs.push(y);
+        }
+      }
+    }
+
     // Subterranean facility hull
-    g.fillStyle(0x0e1b26).fillRect(24, 22, 1104, 488);
+    g.fillStyle(0x0e1b26).fillRect(24, 22, 1104, paperHeight);
 
     // High-contrast cyber grid with cyan node points
     for (let x = 28; x < WORLD.width; x += 48) {
-      for (let y = 20; y < 530; y += 48) {
+      for (let y = 20; y < floorTop; y += 48) {
         g.lineStyle(1, 0x1d4658, 0.45).strokeRect(x, y, 48, 48);
         g.fillStyle(0x00f5d4, 0.5).fillRect(x + 1, y + 1, 3, 3);
       }
@@ -355,16 +451,16 @@ export class FirstScene extends Phaser.Scene {
 
     // Heavy vertical structural columns with illuminated cyan power bus lines
     for (const x of [70, 290, 520, 760, 990]) {
-      g.fillStyle(0x08131d).fillRect(x, 20, 28, 510);
-      g.fillStyle(0x234d5f).fillRect(x, 20, 4, 510);
-      g.fillStyle(0x00e5ff, 0.75).fillRect(x + 12, 20, 4, 510);
-      for (let y = 32; y < 520; y += 48) {
+      g.fillStyle(0x08131d).fillRect(x, 20, 28, columnHeight);
+      g.fillStyle(0x234d5f).fillRect(x, 20, 4, columnHeight);
+      g.fillStyle(0x00e5ff, 0.75).fillRect(x + 12, 20, 4, columnHeight);
+      for (let y = 32; y < floorTop - 10; y += 48) {
         g.fillStyle(0x79e3d8).fillRect(x + 5, y, 4, 4);
       }
     }
 
     // Heavy horizontal support girders with amber hazard stripes and glowing conduits
-    for (const y of [138, 388]) {
+    for (const y of girderYs) {
       g.fillStyle(0x0a1620).fillRect(30, y, 1080, 22);
       // Hazard diagonal stripes
       for (let sx = 34; sx < 1100; sx += 24) {
@@ -413,41 +509,17 @@ export class FirstScene extends Phaser.Scene {
       }
     }
 
-    // High-visibility machinery sprites from industrial tileset
-    for (const [x, y, frame] of [
-      [747, 222, 267], [1044, 353, 268], [400, 329, 287], [109, 90, 267],
-      [230, 260, 287], [630, 300, 267], [920, 260, 285],
-    ]) {
-      this.add.image(x, y, 'industrial', frame).setScale(3).setTint(0x00f5d4).setAlpha(0.85);
-    }
-
-    // Illuminated industrial signage
-    this.add.text(760, 426, 'CORE REACTOR // SUB-LEVEL 01', {
-      fontFamily: 'monospace',
-      fontSize: '12px',
-      color: '#00f5d4',
-      letterSpacing: 3,
-    });
-    this.add.text(760, 444, 'CONTAINMENT GRID • NOMINAL', {
-      fontFamily: 'monospace',
-      fontSize: '9px',
-      color: '#ffb454',
-      letterSpacing: 2,
-    });
-
     // Catwalk floor construction
-    g.fillStyle(0x050b12).fillRect(0, 530, 1152, 54);
-    g.fillStyle(0x30414b).fillRect(0, 534, 1152, 4);
-    for (let x = 0; x < 1152; x += 32) {
-      g.fillStyle(0x1d2d37).fillRect(x, 546, 24, 3);
-      if (x < 192 || x > 960) g.fillStyle(0xffb454, 0.45).fillRect(x, 536, 14, 4);
+    g.fillStyle(0x050b12).fillRect(0, floorTop, WORLD.width, this.layout.height - floorTop);
+    g.fillStyle(0x30414b).fillRect(0, this.layout.floor, WORLD.width, 4);
+    for (let x = 0; x < WORLD.width; x += 32) {
+      g.fillStyle(0x1d2d37).fillRect(x, floorTop + 16, 24, 3);
+      if (x < 192 || x > 960) g.fillStyle(0xffb454, 0.45).fillRect(x, floorTop + 6, 14, 4);
     }
-    this.add.text(28, 563, 'SECTOR 01  /  CÁMARA DE PRUEBAS', { fontFamily: 'monospace', fontSize: '9px', color: '#647c89', letterSpacing: 2 });
-    this.add.text(1002, 563, 'CORE • ONLINE', { fontFamily: 'monospace', fontSize: '9px', color: '#00f5d4' });
   }
 
   private buildPlayer() {
-    this.shadow = this.add.ellipse(this.controller.x, WORLD.floor - 2, 46, 8, 0x000000, 0.42).setDepth(19);
+    this.shadow = this.add.ellipse(this.controller.x, this.layout.floor - 2, 46, 8, 0x000000, 0.42).setDepth(19);
     const body = this.add.graphics();
     // High-tech Jetpack backpack on player's back
     body.fillStyle(0x192834).fillRect(-21, -38, 9, 21); // Dark chassis
@@ -662,7 +734,7 @@ export class FirstScene extends Phaser.Scene {
       if (this.fragments.length >= 80) this.removeFragment(0);
       const width = Phaser.Math.Between(4, 11), height = Phaser.Math.Between(3, 8);
       const sx = Phaser.Math.Clamp(Math.round(x - PAPER.x + Phaser.Math.Between(-15, 15)), 0, PAPER.width - width);
-      const sy = Phaser.Math.Clamp(Math.round(y - PAPER.y + Phaser.Math.Between(-15, 15)), 0, PAPER.height - height);
+      const sy = Phaser.Math.Clamp(Math.round(y - PAPER.y + Phaser.Math.Between(-15, 15)), 0, this.layout.paperHeight - height);
       const frame = `chip-${this.serial++}`;
       this.surface.source.add(frame, 0, sx, sy, width, height);
       const image = this.add.image(x + Phaser.Math.Between(-10, 10), y + Phaser.Math.Between(-10, 10), 'paper-source', frame).setDepth(40);
@@ -831,6 +903,7 @@ export class FirstScene extends Phaser.Scene {
   }
 
   async loadCustomPage(data: ScrapedPageResult): Promise<void> {
+    const pageHeight = paperHeightFor(data.height);
     let sourceElement: HTMLCanvasElement | HTMLImageElement;
 
     if (data.screenshot && data.screenshot.startsWith('data:image/')) {
@@ -844,10 +917,10 @@ export class FirstScene extends Phaser.Scene {
     } else {
       const canvas = document.createElement('canvas');
       canvas.width = PAPER.width;
-      canvas.height = PAPER.height;
+      canvas.height = pageHeight;
       const ctx = canvas.getContext('2d')!;
       ctx.fillStyle = '#f8f9fa';
-      ctx.fillRect(0, 0, PAPER.width, PAPER.height);
+      ctx.fillRect(0, 0, PAPER.width, pageHeight);
       ctx.fillStyle = '#202122';
       ctx.font = 'bold 26px Georgia';
       ctx.fillText(data.title || data.url, 48, 55);
@@ -871,7 +944,8 @@ export class FirstScene extends Phaser.Scene {
     this.shotTime = -1000;
     this.resets++;
 
-    // 1. Surface: draw new image and reset regions
+    // 1. Surface: grow the page when the capture is taller than one fold, then draw it
+    this.applyPageExtent(pageHeight);
     this.surface.loadPage(sourceElement);
 
     // 2. Map platforms to world space
@@ -910,7 +984,8 @@ export class FirstScene extends Phaser.Scene {
     }
 
     // 5. Place player safely on catwalk
-    this.controller.reset(350, WORLD.floor - 4);
+    this.controller.reset(350, this.layout.floor - 4);
+    this.syncCamera();
     this.notify();
   }
 
@@ -923,6 +998,7 @@ export class FirstScene extends Phaser.Scene {
     this.shotTime = -1000;
     this.resets++;
 
+    this.applyPageExtent(PAPER.height);
     const demoCanvas = drawDemoPage();
     this.surface.loadPage(demoCanvas);
 
@@ -933,7 +1009,8 @@ export class FirstScene extends Phaser.Scene {
 
     this.initDemoDetachables();
     this.domTextManager.loadRuns(getDemoTextRuns());
-    this.controller.reset(350, WORLD.floor - 4);
+    this.controller.reset(350, this.layout.floor - 4);
+    this.syncCamera();
     this.notify();
   }
 
@@ -942,7 +1019,8 @@ export class FirstScene extends Phaser.Scene {
     this.shots = 0; this.hits = 0; this.shotTime = -1000;
     this.detachables = [...this.initialDetachables];
     this.domTextManager?.reset();
-    this.controller.reset(350, WORLD.floor - 4);
+    this.controller.reset(350, this.layout.floor - 4);
+    this.syncCamera();
     this.phase = 0; this.paused = false; this.resets++; this.notify();
   }
 
@@ -962,7 +1040,7 @@ export class FirstScene extends Phaser.Scene {
       sourceFrames: this.surface?.source.getFrameNames(true).length,
       resets: this.resets,
       playerX: this.controller ? this.controller.x : 350,
-      playerY: this.controller ? this.controller.y : WORLD.floor - 4,
+      playerY: this.controller ? this.controller.y : this.layout.floor - 4,
       playerVy: this.controller ? this.controller.vy : 0,
       onGround: this.controller ? this.controller.onGround : true,
       isJetpacking: this.controller ? this.controller.isJetpacking : false,
@@ -990,6 +1068,8 @@ export class FirstScene extends Phaser.Scene {
     const drop = this.keys.has('KeyS') || this.keys.has('ArrowDown');
 
     this.controller.update({ moveX: movement, jump, drop, dt });
+    this.syncCamera();
+    this.refreshAim();
 
     if (this.controller.onGround) {
       this.phase += Math.abs(movement) * dt * 16;
@@ -1188,8 +1268,8 @@ export class FirstScene extends Phaser.Scene {
       g.fuse -= dt * 1000;
 
       // Catwalk collision
-      if (g.y >= WORLD.floor - 4) {
-        g.y = WORLD.floor - 4;
+      if (g.y >= this.layout.floor - 4) {
+        g.y = this.layout.floor - 4;
         g.vy = -g.vy * 0.52;
         g.vx *= 0.88;
         if (Math.abs(g.vy) > 35) this.audio.grenadeBounce();
@@ -1285,8 +1365,8 @@ export class FirstScene extends Phaser.Scene {
       v.fuse -= dt * 1000;
 
       // Catwalk containment
-      if (v.y >= WORLD.floor - 8) {
-        v.y = WORLD.floor - 8;
+      if (v.y >= this.layout.floor - 8) {
+        v.y = this.layout.floor - 8;
         v.vy = -Math.abs(v.vy) * 0.2;
         v.vx *= 0.85;
       }
@@ -1380,7 +1460,7 @@ export class FirstScene extends Phaser.Scene {
       if (p.life <= 0) { this.removeFragment(i); continue; }
       p.vy += 490 * dt; p.image.x += p.vx * dt; p.image.y += p.vy * dt; p.image.rotation += p.spin * dt;
       p.image.alpha = Math.min(1, p.life / 160);
-      if (p.image.y > WORLD.floor - 3) { p.image.y = WORLD.floor - 3; p.vy = -Math.abs(p.vy) * 0.24; p.vx *= 0.75; }
+      if (p.image.y > this.layout.floor - 3) { p.image.y = this.layout.floor - 3; p.vy = -Math.abs(p.vy) * 0.24; p.vx *= 0.75; }
     }
 
     // Update dust

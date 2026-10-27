@@ -80,6 +80,11 @@ export class DebrisManager {
   readonly maxDebris = 120;
   private isInitialized = false;
   private currentPlatforms: Platform[] = getDemoPlatforms();
+  private boundsHeight = WORLD.height;
+  private paperHeight = PAPER.height;
+  private playerFloorY = WORLD.floor - 4;
+  private floorBody: RAPIER.RigidBody | null = null;
+  private wallBodies: RAPIER.RigidBody[] = [];
 
   constructor(private host: DebrisHost) {}
 
@@ -88,30 +93,49 @@ export class DebrisManager {
     await RAPIER.init();
     // Gravity pointing downwards towards catwalk
     this.world = new RAPIER.World({ x: 0.0, y: 880.0 });
+    this.rebuildBounds();
 
-    // 1. Catwalk floor collider at y = 524 (6px margin above catwalk line y=530 to guarantee zero protrusion)
-    const floorTop = 524;
-    const floorHalfHeight = 50.0;
-    const floorDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(WORLD.width / 2, floorTop + floorHalfHeight);
-    const floorBody = this.world.createRigidBody(floorDesc);
-    const floorCollider = RAPIER.ColliderDesc.cuboid(WORLD.width / 2 + 100, floorHalfHeight);
-    floorCollider.setFriction(0.85);
-    floorCollider.setRestitution(0.2);
-    this.world.createCollider(floorCollider, floorBody);
-
-    // 2. Side walls to contain debris within screen bounds
-    const leftWallDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(-15, WORLD.height / 2);
-    const leftWall = this.world.createRigidBody(leftWallDesc);
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(10.0, WORLD.height / 2 + 50), leftWall);
-
-    const rightWallDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(WORLD.width + 15, WORLD.height / 2);
-    const rightWall = this.world.createRigidBody(rightWallDesc);
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(10.0, WORLD.height / 2 + 50), rightWall);
-
-    // 3. Segmented platform colliders (so debris can stack and fall when platforms are destroyed)
+    // Segmented platform colliders (so debris can stack and fall when platforms are destroyed)
     this.buildPlatformColliders(this.currentPlatforms);
 
     this.isInitialized = true;
+  }
+
+  /** Lengthen the shaft when the page grows. A one-fold call rebuilds the same floor and walls. */
+  setWorldExtent(worldHeight: number, playerFloorY: number, paperHeight: number): void {
+    this.boundsHeight = worldHeight;
+    this.playerFloorY = playerFloorY;
+    this.paperHeight = paperHeight;
+    if (!this.world) return;
+    this.rebuildBounds();
+  }
+
+  private rebuildBounds(): void {
+    if (!this.world) return;
+    if (this.floorBody) {
+      this.world.removeRigidBody(this.floorBody);
+      this.floorBody = null;
+    }
+    for (const wall of this.wallBodies) this.world.removeRigidBody(wall);
+    this.wallBodies = [];
+
+    // Catwalk collider sits 6px above the player's feet so debris cannot poke through the floor line.
+    const floorTop = this.playerFloorY - 6;
+    const floorHalfHeight = 50.0;
+    const floorDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(WORLD.width / 2, floorTop + floorHalfHeight);
+    this.floorBody = this.world.createRigidBody(floorDesc);
+    const floorCollider = RAPIER.ColliderDesc.cuboid(WORLD.width / 2 + 100, floorHalfHeight);
+    floorCollider.setFriction(0.85);
+    floorCollider.setRestitution(0.2);
+    this.world.createCollider(floorCollider, this.floorBody);
+
+    const midY = this.boundsHeight / 2;
+    const halfH = this.boundsHeight / 2 + 50;
+    const leftWall = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(-15, midY));
+    this.world.createCollider(RAPIER.ColliderDesc.cuboid(10.0, halfH), leftWall);
+    const rightWall = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(WORLD.width + 15, midY));
+    this.world.createCollider(RAPIER.ColliderDesc.cuboid(10.0, halfH), rightWall);
+    this.wallBodies = [leftWall, rightWall];
   }
 
   setPlatforms(platforms: Platform[]): void {
@@ -395,7 +419,7 @@ export class DebrisManager {
       // Verify centroid is within paper coordinates
       const sx = gx - PAPER.x;
       const sy = gy - PAPER.y;
-      if (sx < 0 || sx >= PAPER.width || sy < 0 || sy >= PAPER.height) continue;
+      if (sx < 0 || sx >= PAPER.width || sy < 0 || sy >= this.paperHeight) continue;
 
       // Triangle area via cross product
       const area2 = Math.abs(
@@ -418,7 +442,7 @@ export class DebrisManager {
       const h = Math.max(8, Math.min(54, Math.round(maxY - minY)));
 
       const frameCropX = clamp(Math.round(minX - PAPER.x), 0, PAPER.width - w);
-      const frameCropY = clamp(Math.round(minY - PAPER.y), 0, PAPER.height - h);
+      const frameCropY = clamp(Math.round(minY - PAPER.y), 0, this.paperHeight - h);
 
       // Local triangle coordinates relative to bounding box for canvas clipping
       const paperLeft = frameCropX + PAPER.x;
@@ -522,12 +546,12 @@ export class DebrisManager {
       const sy = y + Math.sin(sAngle) * sDist;
       const paperX = sx - PAPER.x;
       const paperY = sy - PAPER.y;
-      if (paperX < 0 || paperX >= PAPER.width - 24 || paperY < 0 || paperY >= PAPER.height - 24) continue;
+      if (paperX < 0 || paperX >= PAPER.width - 24 || paperY < 0 || paperY >= this.paperHeight - 24) continue;
 
       const sw = Math.round(5 + Math.random() * 4); // 5-9px narrow strip
       const sh = Math.round(16 + Math.random() * 16); // 16-32px elongated strip
       const cropX = clamp(Math.round(paperX), 0, PAPER.width - sw);
-      const cropY = clamp(Math.round(paperY), 0, PAPER.height - sh);
+      const cropY = clamp(Math.round(paperY), 0, this.paperHeight - sh);
 
       const frameKey = `splinter-${this.serial++}`;
       if (this.host.addDebrisPolygon) {
@@ -576,8 +600,8 @@ export class DebrisManager {
       const pos = piece.body.translation();
       const rot = piece.body.rotation();
 
-      // If fallen below viewport, recycle
-      if (pos.y > WORLD.height + 40 || pos.x < -60 || pos.x > WORLD.width + 60) {
+      // Recycle pieces that have left the playable shaft.
+      if (pos.y > this.boundsHeight + 40 || pos.x < -60 || pos.x > WORLD.width + 60) {
         this.removeDebris(i);
         continue;
       }

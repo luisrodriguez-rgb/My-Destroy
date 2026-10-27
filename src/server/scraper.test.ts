@@ -73,6 +73,28 @@ describe('Scraper platform pruning & detachables extraction', () => {
     expect(detachables.length).toBeLessThanOrEqual(8);
   });
 
+  it('keeps blocks below the first fold when the captured page is tall', () => {
+    const low: CandidateElement = { tag: 'h2', x: 48, y: 1400, width: 480, height: 36, text: 'Mas abajo' };
+    expect(prunePlatforms([low])).toHaveLength(0);
+    const tall = prunePlatforms([low], 1952);
+    expect(tall).toHaveLength(1);
+    expect(tall[0].y).toBe(1400);
+    expect(tall[0].height).toBe(36);
+
+    const card: CandidateElement = { tag: 'figure', x: 80, y: 1500, width: 300, height: 180 };
+    expect(extractDetachables([card])).toHaveLength(0);
+    expect(extractDetachables([card], 1952)).toHaveLength(1);
+  });
+
+  it('grows the platform budget across four folds and keeps one fold capped at 14', () => {
+    const candidates: CandidateElement[] = [];
+    for (let i = 0; i < 40; i++) {
+      candidates.push({ tag: 'div', x: 40, y: 20 + i * 48, width: 280, height: 24 });
+    }
+    expect(prunePlatforms(candidates).length).toBeLessThanOrEqual(14);
+    expect(prunePlatforms(candidates, 1952)).toHaveLength(40);
+  });
+
   it('provides structured presets for offline testing', () => {
     const wiki = getPresetPage('wikipedia');
     expect(wiki.platforms.length).toBeGreaterThan(0);

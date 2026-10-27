@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DebrisManager, type DebrisHost, type VisualDebris } from './DebrisManager';
+import { worldForPaper } from '../pageExtent';
 
 describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
   function createMockHost() {
@@ -183,6 +184,21 @@ describe('DebrisManager (Fracture & Rapier2D Physics)', () => {
     // Because distance is < 14px, it should be annihilated in the event horizon
     expect(manager.count).toBe(0);
 
+    manager.destroy();
+  });
+
+  it('spawns fracture debris on a page taller than one fold', async () => {
+    const { mockHost } = createMockHost();
+    const manager = new DebrisManager(mockHost);
+    await manager.init();
+
+    manager.spawnFracture(500, 1200, 24, 0, 6, 200);
+    expect(manager.count).toBe(0);
+
+    const world = worldForPaper(1952);
+    manager.setWorldExtent(world.height, world.floor - 4, world.paperHeight);
+    manager.spawnFracture(500, 1200, 24, 0, 6, 200);
+    expect(manager.count).toBeGreaterThan(0);
     manager.destroy();
   });
 });
