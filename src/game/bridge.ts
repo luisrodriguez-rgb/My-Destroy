@@ -1,5 +1,7 @@
 export type { WeaponId } from './weapons/types';
+export type { PlatformMaterial } from './tuning';
 import type { WeaponId } from './weapons/types';
+import type { PlatformMaterial } from './tuning';
 import type { ScrapedPageResult } from '../server/scraper';
 
 export type Preferences = { muted: boolean; reducedMotion: boolean };
@@ -10,6 +12,8 @@ export type SceneStats = {
   paused: boolean;
   ready: boolean;
   weapon: WeaponId;
+  currentMaterial?: PlatformMaterial;
+  craterDepth?: number;
 };
 export type SceneControls = {
   reset(): void;

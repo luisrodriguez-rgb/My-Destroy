@@ -1,7 +1,7 @@
 import * as Phaser from 'phaser';
 import { DestructiblePage } from '../destruction/DestructiblePage';
 import { ShotAudio } from '../audio/ShotAudio';
-import { COLORS, PAPER, WORLD } from '../tuning';
+import { COLORS, PAPER, WORLD, type PlatformMaterial } from '../tuning';
 import { clampCameraY, paperHeightFor, worldForPaper } from '../pageExtent';
 import type { Preferences, SceneCallbacks, WeaponId } from '../bridge';
 import { screenToWorld } from '../coordinates';
@@ -71,6 +71,8 @@ export class FirstScene extends Phaser.Scene {
   private resets = 0;
   private paused = false;
   private phase = 0;
+  private lastNotifiedMaterial: PlatformMaterial = 'metal';
+  private lastNotifiedCraterDepth = 0;
   private layout = worldForPaper(PAPER.height);
   private worldGraphics!: Phaser.GameObjects.Graphics;
   private floorMark!: Phaser.GameObjects.Text;
@@ -228,6 +230,19 @@ export class FirstScene extends Phaser.Scene {
         }
         this.textures.remove(frameKey);
       },
+      onPlatformSegmentCollapse: (seg) => {
+        this.surface.clearArea(
+          Math.max(0, seg.cx - seg.width / 2 - PAPER.x),
+          Math.max(0, seg.cy - 2 - PAPER.y),
+          seg.width,
+          Math.max(8, seg.height),
+          true,
+        );
+        this.surface.flushDirty();
+        this.emitImpact(seg.cx, seg.cy, Math.PI / 2, 14, 5);
+        this.audio.debrisCrack();
+        this.notify();
+      },
     });
     void this.debrisManager.init();
     this.initDemoDetachables();
@@ -347,6 +362,10 @@ export class FirstScene extends Phaser.Scene {
   setPreferences(value: Preferences) { this.prefs = value; this.audio.setMuted(value.muted); }
   setPaused(value: boolean) { this.paused = value; this.keys.clear(); if (value) { this.audio.stop(); this.lastShot = undefined; } this.notify(); }
   private notify() {
+    const currentMaterial = this.controller ? this.controller.currentMaterial : 'metal';
+    const craterDepth = this.controller ? this.controller.craterDepth : 0;
+    this.lastNotifiedMaterial = currentMaterial;
+    this.lastNotifiedCraterDepth = craterDepth;
     this.callbacks.update({
       shots: this.shots,
       hits: this.hits,
@@ -354,6 +373,8 @@ export class FirstScene extends Phaser.Scene {
       paused: this.paused,
       ready: true,
       weapon: this.currentWeaponId,
+      currentMaterial,
+      craterDepth,
     });
   }
 
@@ -926,12 +947,31 @@ export class FirstScene extends Phaser.Scene {
       ctx.fillText(data.title || data.url, 48, 55);
       ctx.fillStyle = '#a2a9b1';
       ctx.fillRect(48, 72, PAPER.width - 96, 1);
+      const materialAccents: Record<PlatformMaterial, { accent: string; label: string }> = {
+        concrete: { accent: '#64748b', label: 'CONCRETO' },
+        metal: { accent: '#3b82f6', label: 'METAL' },
+        wood: { accent: '#b45309', label: 'MADERA' },
+        glass: { accent: '#06b6d4', label: 'VIDRIO' },
+        elastic: { accent: '#f59e0b', label: 'ELÁSTICO' },
+        paper: { accent: '#94a3b8', label: 'PAPEL' },
+      };
       for (const p of data.platforms) {
+        const mat: PlatformMaterial = p.material ?? 'paper';
+        const style = materialAccents[mat];
         ctx.fillStyle = '#eaecf0';
         ctx.fillRect(p.x, p.y, p.width, p.height);
+        ctx.fillStyle = style.accent;
+        ctx.fillRect(p.x, p.y, 4, p.height);
+        ctx.fillRect(p.x, p.y, p.width, 2);
         ctx.fillStyle = '#36414c';
         ctx.font = '11px sans-serif';
-        ctx.fillText(p.name, p.x + 8, p.y + Math.min(18, p.height - 4));
+        ctx.fillText(p.name, p.x + 10, p.y + Math.min(18, p.height - 4));
+        if (p.width >= 150 && p.height >= 14) {
+          ctx.fillStyle = style.accent;
+          ctx.font = 'bold 9px monospace';
+          const tagWidth = ctx.measureText(style.label).width;
+          ctx.fillText(style.label, p.x + p.width - tagWidth - 8, p.y + Math.min(16, p.height - 4));
+        }
       }
       sourceElement = canvas;
     }
@@ -957,6 +997,7 @@ export class FirstScene extends Phaser.Scene {
       width: p.width,
       height: p.height,
       oneWay: true,
+      material: p.material,
     }));
     this.currentPlatforms = worldPlatforms;
     this.controller.setPlatforms(worldPlatforms);
@@ -1045,6 +1086,8 @@ export class FirstScene extends Phaser.Scene {
       onGround: this.controller ? this.controller.onGround : true,
       isJetpacking: this.controller ? this.controller.isJetpacking : false,
       platform: this.controller ? this.controller.currentPlatformId : 'catwalk',
+      currentMaterial: this.controller ? this.controller.currentMaterial : 'metal',
+      craterDepth: this.controller ? this.controller.craterDepth : 0,
       weapon: this.currentWeaponId,
       grenades: this.grenades.length,
       vortices: this.vortices.length,
@@ -1070,11 +1113,18 @@ export class FirstScene extends Phaser.Scene {
     this.controller.update({ moveX: movement, jump, drop, dt });
     this.syncCamera();
     this.refreshAim();
+    if (
+      this.controller.currentMaterial !== this.lastNotifiedMaterial ||
+      this.controller.craterDepth !== this.lastNotifiedCraterDepth
+    ) {
+      this.notify();
+    }
 
     if (this.controller.onGround) {
       this.phase += Math.abs(movement) * dt * 16;
     }
     this.actor.setPosition(this.controller.x, this.controller.y);
+    this.actor.setRotation(this.controller.onGround ? this.controller.surfaceSlope * 0.45 : 0);
 
     // Dynamic Jetpack Thruster Flames
     this.jetpackFlames.clear();
@@ -1199,6 +1249,14 @@ export class FirstScene extends Phaser.Scene {
     }
 
     this.effects.clear();
+
+    if (!this.controller.onGround && this.controller.lastBounceBoost > 0 && this.controller.vy < 0 && !this.prefs.reducedMotion) {
+      const bx = this.controller.x;
+      const by = this.controller.y + 3;
+      this.effects.lineStyle(2, COLORS.amber, 0.85).strokeEllipse(bx, by, 26, 8);
+      this.effects.lineStyle(1.5, COLORS.cyan, 0.95).strokeEllipse(bx, by - 2, 18, 5);
+      this.effects.fillStyle(COLORS.cyan, 0.45).fillEllipse(bx, by, 14, 4);
+    }
 
     if (this.isRepairing && !this.prefs.reducedMotion) {
       const mx = this.controller.x + Math.cos(angle) * 38;
