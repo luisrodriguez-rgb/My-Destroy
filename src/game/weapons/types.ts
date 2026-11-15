@@ -1,3 +1,5 @@
+import type { PlatformMaterial } from '../tuning';
+
 export type WeaponId = 'pistol' | 'shotgun' | 'grenade' | 'laser' | 'vortex';
 
 export interface ProjectileConfig {
@@ -23,4 +25,13 @@ export interface WeaponConfig {
   pellets?: number;
   spreadDeg?: number;
   projectile?: ProjectileConfig;
+  damagePower: number;
+  knockback: number;
+  blastForce: number;
+  ditherWidth: number;
+  shakeIntensity: number;
+  shakeDuration: number;
+  clusterCount?: number;
+  clusterRadius?: number;
+  materialMultipliers: Record<PlatformMaterial, number>;
 }
