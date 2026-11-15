@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier2d-compat';
 import Delaunator from 'delaunator';
-import { PAPER, WORLD } from '../tuning';
+import { PAPER, PLATFORM_MATERIALS, WORLD, type PlatformMaterial } from '../tuning';
 import { getDemoPlatforms, type Platform } from '../platforms/demoPlatforms';
 
 export interface VisualDebris {
@@ -40,6 +40,15 @@ export interface DebrisHost {
   addDebrisFrame?(frameKey: string, x: number, y: number, w: number, h: number): void;
   addLetterFrame?(frameKey: string, charData: LetterDebrisData): void;
   removeDebrisFrame(frameKey: string): void;
+  /** Fired when a slab segment gives way structurally (unstable island or debris overload). */
+  onPlatformSegmentCollapse?(seg: {
+    platformId: string;
+    cx: number;
+    cy: number;
+    width: number;
+    height: number;
+    material: PlatformMaterial;
+  }): void;
 }
 
 export interface DebrisPiece {
@@ -57,7 +66,22 @@ export interface PlatformSegment {
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
   active: boolean;
+  platformId: string;
+  material: PlatformMaterial;
+  /** 0..1 fraction of crust + inner stratum samples still solid in the mask. */
+  integrity: number;
+  /** Max debris pieces resting on the segment before it fails. */
+  maxLoad: number;
+  /** Set when debris weight broke the segment; only a real mask repair restores it. */
+  collapsedByOverload?: boolean;
+  /** Set when the segment was an unsupported island; restored once its neighbours hold again. */
+  collapsedByInstability?: boolean;
+  /** Crust state seen in the previous sync, used to detect repair transitions. */
+  wasTopSolid?: boolean;
 }
+
+/** Materials too brittle to keep a lone segment hanging between two holes. */
+const FRAGILE_MATERIALS: ReadonlySet<PlatformMaterial> = new Set<PlatformMaterial>(['glass', 'paper', 'wood']);
 
 export interface DetachableData {
   id: string;
@@ -152,15 +176,14 @@ export class DebrisManager {
     if (!this.world) return;
     const segWidth = 24;
     for (const p of platforms) {
+      const material = p.material ?? 'paper';
+      const profile = PLATFORM_MATERIALS[material];
       for (let sx = p.x; sx < p.x + p.width; sx += segWidth) {
         const sw = Math.min(segWidth, p.x + p.width - sx);
         const cx = sx + sw / 2;
         const cy = p.y + 2.0; // Thin landing sheet at the very top edge of platform
         const pBody = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(cx, cy));
-        const pCol = RAPIER.ColliderDesc.cuboid(sw / 2, 2.0);
-        pCol.setFriction(0.8);
-        pCol.setRestitution(0.2);
-        const collider = this.world.createCollider(pCol, pBody);
+        const collider = this.world.createCollider(this.segmentColliderDesc(sw, material), pBody);
         this.platformSegments.push({
           cx,
           cy,
@@ -169,9 +192,58 @@ export class DebrisManager {
           body: pBody,
           collider,
           active: true,
+          platformId: p.id,
+          material,
+          integrity: 1,
+          maxLoad: profile.maxLoad,
+          wasTopSolid: true,
         });
       }
     }
+  }
+
+  private segmentColliderDesc(width: number, material: PlatformMaterial): RAPIER.ColliderDesc {
+    const profile = PLATFORM_MATERIALS[material];
+    const desc = RAPIER.ColliderDesc.cuboid(width / 2, 2.0);
+    desc.setFriction(profile.friction);
+    desc.setRestitution(profile.restitution);
+    return desc;
+  }
+
+  private deactivateSegment(seg: PlatformSegment): void {
+    if (!this.world || !seg.active) return;
+    this.world.removeCollider(seg.collider, true);
+    seg.active = false;
+  }
+
+  private reactivateSegment(seg: PlatformSegment): void {
+    if (!this.world || seg.active) return;
+    seg.collider = this.world.createCollider(this.segmentColliderDesc(seg.width, seg.material), seg.body);
+    seg.active = true;
+    seg.collapsedByOverload = false;
+    seg.collapsedByInstability = false;
+  }
+
+  /** Wakes debris resting near a segment and nudges it downward so nothing hangs mid-air. */
+  private wakeDebrisNear(seg: PlatformSegment, pushY = 16): void {
+    for (const piece of this.activeDebris) {
+      const pos = piece.body.translation();
+      if (Math.abs(pos.x - seg.cx) < seg.width / 2 + 10 && Math.abs(pos.y - seg.cy) < 24) {
+        piece.body.wakeUp();
+        piece.body.applyImpulse({ x: (Math.random() - 0.5) * 12, y: pushY }, true);
+      }
+    }
+  }
+
+  private notifyCollapse(seg: PlatformSegment): void {
+    this.host.onPlatformSegmentCollapse?.({
+      platformId: seg.platformId,
+      cx: seg.cx,
+      cy: seg.cy,
+      width: seg.width,
+      height: seg.height,
+      material: seg.material,
+    });
   }
 
   spawnDetachable(data: DetachableData, frameKey: string): void {
@@ -270,40 +342,117 @@ export class DebrisManager {
 
   /**
    * Synchronizes platform colliders against RegionMask destruction.
-   * If any supporting point is damaged, the Rapier collider is immediately removed
-   * and resting debris receives a downward nudge so nothing hangs like stalactites.
+   * Pass 1: any punctured crust sample removes the Rapier collider immediately (resting debris
+   * gets a downward nudge so nothing hangs like stalactites); integrity also samples the inner stratum.
+   * Pass 2: on brittle materials, a lone segment left between two holes collapses as well.
    */
   syncPlatforms(isSolid: (x: number, y: number) => boolean): void {
     if (!this.world || !this.isInitialized) return;
-    for (const seg of this.platformSegments) {
-      // Sample 3 points along the thin top edge
-      const topY = seg.cy - 1;
-      const solidLeft = isSolid(seg.cx - seg.width * 0.35, topY);
-      const solidCenter = isSolid(seg.cx, topY);
-      const solidRight = isSolid(seg.cx + seg.width * 0.35, topY);
-      const allSolid = solidCenter && solidLeft && solidRight;
+    const topSolidBySeg = new Map<PlatformSegment, boolean>();
 
-      // Aggressive deactivation: if any sample point is punctured, dissolve collider
+    // Pass 1: crust puncture + integrity
+    for (const seg of this.platformSegments) {
+      const topY = seg.cy - 1;
+      const midY = seg.cy + Math.min(6, seg.height);
+      const xs = [seg.cx - seg.width * 0.35, seg.cx, seg.cx + seg.width * 0.35];
+      const top = xs.map(x => isSolid(x, topY));
+      const mid = xs.map(x => isSolid(x, midY));
+      const allSolid = top[0] && top[1] && top[2];
+      seg.integrity = [...top, ...mid].filter(Boolean).length / 6;
+      topSolidBySeg.set(seg, allSolid);
+
       if (seg.active && !allSolid) {
-        this.world.removeCollider(seg.collider, true);
-        seg.active = false;
-        // Wake up resting debris and apply a downward push
-        for (const piece of this.activeDebris) {
-          const pos = piece.body.translation();
-          if (Math.abs(pos.x - seg.cx) < seg.width / 2 + 10 && Math.abs(pos.y - seg.cy) < 24) {
-            piece.body.wakeUp();
-            piece.body.applyImpulse({ x: (Math.random() - 0.5) * 12, y: 16 }, true);
-          }
-        }
+        this.deactivateSegment(seg);
+        this.wakeDebrisNear(seg);
       } else if (!seg.active && allSolid) {
-        // Reactivate collider when platform surface is repaired
-        const pCol = RAPIER.ColliderDesc.cuboid(seg.width / 2, 2.0);
-        pCol.setFriction(0.8);
-        pCol.setRestitution(0.2);
-        seg.collider = this.world.createCollider(pCol, seg.body);
-        seg.active = true;
+        if (seg.collapsedByOverload) {
+          // Overload broke it: only a real repair (crust going from damaged to solid) restores it.
+          if (seg.wasTopSolid === false) this.reactivateSegment(seg);
+        } else if (!seg.collapsedByInstability) {
+          // Reactivate collider when platform surface is repaired
+          this.reactivateSegment(seg);
+        }
+        // Instability-collapsed segments are resolved in pass 2.
       }
+      seg.wasTopSolid = allSolid;
     }
+
+    // Pass 2: collapse unsupported islands on brittle slabs
+    const groups = new Map<string, PlatformSegment[]>();
+    for (const seg of this.platformSegments) {
+      const list = groups.get(seg.platformId);
+      if (list) list.push(seg);
+      else groups.set(seg.platformId, [seg]);
+    }
+
+    for (const segs of groups.values()) {
+      segs.sort((a, b) => a.cx - b.cx);
+      // A segment "stands" if active, or if it only fell for lack of neighbours and its crust is intact.
+      const standing = segs.map(seg => seg.active || (!!seg.collapsedByInstability && !!topSolidBySeg.get(seg)));
+      const inactiveCount = standing.filter(st => !st).length;
+      const eligible = segs.length >= 4 && inactiveCount >= 2 && FRAGILE_MATERIALS.has(segs[0].material);
+      const unstable = new Set<number>();
+
+      if (eligible) {
+        let i = 0;
+        while (i < segs.length) {
+          if (!standing[i]) { i++; continue; }
+          let j = i;
+          while (j + 1 < segs.length && standing[j + 1]) j++;
+          const runLength = j - i + 1;
+          const flankedLeft = i > 0 && !standing[i - 1];
+          const flankedRight = j < segs.length - 1 && !standing[j + 1];
+          if (runLength <= 1 && flankedLeft && flankedRight) {
+            for (let k = i; k <= j; k++) unstable.add(k);
+          }
+          i = j + 1;
+        }
+      }
+
+      segs.forEach((seg, idx) => {
+        if (unstable.has(idx)) {
+          if (seg.active) {
+            this.deactivateSegment(seg);
+            seg.collapsedByInstability = true;
+            this.wakeDebrisNear(seg, 22);
+            this.notifyCollapse(seg);
+          }
+        } else if (!seg.active && seg.collapsedByInstability && topSolidBySeg.get(seg)) {
+          // Neighbours hold again (or the slab is no longer eligible): the segment is supported.
+          this.reactivateSegment(seg);
+        }
+      });
+    }
+  }
+
+  /**
+   * Fails active segments carrying more resting debris than their material allows.
+   * Returns how many segments collapsed this step.
+   */
+  checkDebrisOverload(): number {
+    if (!this.world || !this.isInitialized) return 0;
+    let collapsed = 0;
+    for (const seg of this.platformSegments) {
+      if (!seg.active) continue;
+      const load: DebrisPiece[] = [];
+      for (const piece of this.activeDebris) {
+        const pos = piece.body.translation();
+        if (Math.abs(pos.x - seg.cx) < seg.width / 2 + 4 && pos.y >= seg.cy - 18 && pos.y <= seg.cy + 6) {
+          load.push(piece);
+        }
+      }
+      if (load.length <= seg.maxLoad) continue;
+
+      this.deactivateSegment(seg);
+      seg.collapsedByOverload = true;
+      for (const piece of load) {
+        piece.body.wakeUp();
+        piece.body.applyImpulse({ x: (Math.random() - 0.5) * 10, y: 24 }, true);
+      }
+      this.notifyCollapse(seg);
+      collapsed++;
+    }
+    return collapsed;
   }
 
   /**
@@ -594,6 +743,7 @@ export class DebrisManager {
   update(): void {
     if (!this.world || !this.isInitialized) return;
     this.world.step();
+    this.checkDebrisOverload();
 
     for (let i = this.activeDebris.length - 1; i >= 0; i--) {
       const piece = this.activeDebris[i];
