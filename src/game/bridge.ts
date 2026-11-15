@@ -14,6 +14,8 @@ export type SceneStats = {
   weapon: WeaponId;
   currentMaterial?: PlatformMaterial;
   craterDepth?: number;
+  combo?: number;
+  laserHeat?: number;
 };
 export type SceneControls = {
   reset(): void;
