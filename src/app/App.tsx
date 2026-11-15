@@ -63,6 +63,12 @@ export function App() {
   const [activeUrl, setActiveUrl] = useState('demo');
   const [isScraping, setIsScraping] = useState(false);
   const [scrapeError, setScrapeError] = useState('');
+  const [pageMeta, setPageMeta] = useState<{
+    platformsCount: number;
+    renderMode?: string;
+    materialSummary?: Record<string, number>;
+  } | null>(null);
+  const deepLinkHandled = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +88,16 @@ export function App() {
     try { localStorage.setItem('my-destroy:preferences', JSON.stringify(prefs)); } catch { /* Session preferences still work. */ }
     controls.current?.preferences(prefs);
   }, [prefs]);
+
+  useEffect(() => {
+    if (!stats.ready || deepLinkHandled.current) return;
+    deepLinkHandled.current = true;
+    const paramUrl = new URLSearchParams(window.location.search).get('url')?.trim();
+    if (paramUrl) {
+      setUrlInput(paramUrl);
+      void loadUrl(paramUrl);
+    }
+  }, [stats.ready]);
 
   function reset() {
     controls.current?.reset(); controls.current?.focus(); setResetMessage('Página restaurada. Empieza otra vez.');
@@ -107,6 +123,14 @@ export function App() {
       const data = await res.json();
       await controls.current?.loadCustomPage(data);
       setActiveUrl(data.url);
+      setPageMeta({
+        platformsCount: Array.isArray(data.platforms) ? data.platforms.length : 0,
+        renderMode: data.renderMode,
+        materialSummary: data.materialSummary,
+      });
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set('url', data.url);
+      window.history.replaceState(null, '', nextUrl.toString());
       setResetMessage(`Página cargada: ${data.title || trimmed}`);
       clearTimeout(resetTimer.current);
       resetTimer.current = setTimeout(() => setResetMessage(''), 3000);
@@ -126,11 +150,39 @@ export function App() {
     controls.current?.loadDemoPage();
     setActiveUrl('demo');
     setUrlInput('https://es.wikipedia.org');
+    setPageMeta(null);
     setScrapeError('');
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete('url');
+    window.history.replaceState(null, '', nextUrl.toString());
     setResetMessage('Demo original restaurada.');
     clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(() => setResetMessage(''), 2400);
   }
+
+  async function handleCopyLink() {
+    const target = activeUrl !== 'demo' ? activeUrl : urlInput.trim();
+    const shareUrl = new URL(window.location.href);
+    if (target) {
+      shareUrl.searchParams.set('url', target);
+    } else {
+      shareUrl.searchParams.delete('url');
+    }
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl.toString());
+      }
+      setResetMessage('Enlace de demolición copiado.');
+    } catch {
+      setResetMessage('No se pudo copiar el enlace.');
+    }
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setResetMessage(''), 2400);
+  }
+
+  const materialEntries = pageMeta?.materialSummary
+    ? Object.entries(pageMeta.materialSummary).filter(([, count]) => typeof count === 'number' && count > 0)
+    : [];
 
   return <main>
     <header className="topbar">
@@ -196,6 +248,24 @@ export function App() {
             >
               GitHub
             </button>
+            <button
+              type="button"
+              className="preset-chip"
+              onClick={() => handlePreset('https://news.ycombinator.com')}
+              disabled={isScraping}
+              title="Cargar Hacker News"
+            >
+              Hacker News
+            </button>
+            <button
+              type="button"
+              className="preset-chip"
+              onClick={() => handlePreset('https://developer.mozilla.org')}
+              disabled={isScraping}
+              title="Cargar MDN"
+            >
+              MDN
+            </button>
           </div>
 
           <button
@@ -214,6 +284,16 @@ export function App() {
                 <span aria-hidden="true">⚡</span>
               </>
             )}
+          </button>
+
+          <button
+            type="button"
+            className="share-link-button"
+            onClick={() => void handleCopyLink()}
+            disabled={isScraping}
+            title="Copiar enlace directo de demolición"
+          >
+            🔗 Link
           </button>
 
           {scrapeError && (
@@ -385,7 +465,20 @@ export function App() {
     </section>
 
     <div className="below-scene">
-      <p className="session-status" aria-live="polite"><span className="status-dot" />{stats.shots ? `${stats.shots} disparos · ${stats.hits} impactos` : 'Todo listo para hacer un poco de ruido.'}</p>
+      <div className="scene-meta-group">
+        <p className="session-status" aria-live="polite"><span className="status-dot" />{stats.shots ? `${stats.shots} disparos · ${stats.hits} impactos` : 'Todo listo para hacer un poco de ruido.'}</p>
+        {pageMeta && (
+          <div className="page-meta-pill" data-testid="page-meta-pill">
+            <span>{pageMeta.platformsCount} {pageMeta.platformsCount === 1 ? 'piso' : 'pisos'}</span>
+            {pageMeta.renderMode && <span className="meta-mode">{pageMeta.renderMode}</span>}
+            {materialEntries.length > 0 && (
+              <span className="meta-materials">
+                {materialEntries.map(([mat, count]) => `${mat} ${count}`).join(' · ')}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
       <div className="preferences"><button aria-pressed={prefs.reducedMotion} onClick={() => setPrefs(p => ({ ...p, reducedMotion: !p.reducedMotion }))}><Icon name="effects" />Efectos suaves<span className={`toggle ${prefs.reducedMotion ? 'on' : ''}`} /></button><button aria-pressed={prefs.muted} onClick={() => setPrefs(p => ({ ...p, muted: !p.muted }))}><Icon name={prefs.muted ? 'muted' : 'sound'} />{prefs.muted ? 'Sonido apagado' : 'Sonido activado'}<kbd>M</kbd></button></div>
     </div>
     <p className="mobile-note">Usa los botones táctiles para moverte, activar el jetpack o reparar, y toca el escenario para disparar.</p>
