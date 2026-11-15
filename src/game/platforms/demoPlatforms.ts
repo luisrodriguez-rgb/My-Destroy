@@ -1,4 +1,6 @@
-import { PAPER } from '../tuning';
+import { PAPER, type PlatformMaterial } from '../tuning';
+
+export type { PlatformMaterial } from '../tuning';
 
 export interface Platform {
   id: string;
@@ -8,6 +10,8 @@ export interface Platform {
   width: number;
   height: number;
   oneWay: boolean;
+  /** Surface material driving traction, bounce and structural strength. Defaults to 'paper'. */
+  material?: PlatformMaterial;
 }
 
 /**
@@ -25,6 +29,7 @@ export function getDemoPlatforms(): Platform[] {
       width: 1008,
       height: 12,
       oneWay: true,
+      material: 'concrete',
     },
     // 2. Button card: "Al otro lado ↗"
     {
@@ -35,6 +40,7 @@ export function getDemoPlatforms(): Platform[] {
       width: 142,
       height: 37,
       oneWay: true,
+      material: 'elastic',
     },
     // 3. Right story block / subtitle card
     {
@@ -45,6 +51,7 @@ export function getDemoPlatforms(): Platform[] {
       width: 458,
       height: 20,
       oneWay: true,
+      material: 'wood',
     },
     // 4. Headline card ledge: "Internet, hecho pedazos."
     {
@@ -55,6 +62,7 @@ export function getDemoPlatforms(): Platform[] {
       width: 420,
       height: 16,
       oneWay: true,
+      material: 'concrete',
     },
     // 5. Editorial landscape middle shelf
     {
@@ -65,6 +73,7 @@ export function getDemoPlatforms(): Platform[] {
       width: 458,
       height: 20,
       oneWay: true,
+      material: 'glass',
     },
     // 6. Editorial landscape top edge
     {
@@ -75,6 +84,7 @@ export function getDemoPlatforms(): Platform[] {
       width: 458,
       height: 14,
       oneWay: true,
+      material: 'glass',
     },
     // 7. Top navigation bar
     {
@@ -85,6 +95,7 @@ export function getDemoPlatforms(): Platform[] {
       width: 1008,
       height: 12,
       oneWay: true,
+      material: 'metal',
     },
   ];
 }
