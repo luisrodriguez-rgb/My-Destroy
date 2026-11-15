@@ -31,6 +31,8 @@ export class PlatformController {
   surfaceSlope = 0;
   /** 1 when the last jump was boosted by an elastic surface, else 0. */
   lastBounceBoost = 0;
+  /** Horizontal weapon-recoil velocity layered on top of vx; decays by surface traction. */
+  recoilVx = 0;
 
   private coyoteTimer = 0;
   private jumpBufferTimer = 0;
@@ -52,8 +54,29 @@ export class PlatformController {
     this.craterDepth = 0;
     this.surfaceSlope = 0;
     this.lastBounceBoost = 0;
+    this.recoilVx = 0;
     this.coyoteTimer = 0;
     this.jumpBufferTimer = 0;
+  }
+
+  /**
+   * Applies a weapon-recoil impulse (px/s). Horizontal recoil accumulates into recoilVx (clamped to
+   * ±420) and decays in update(). A heavy downward shot (impulseVy < -35) lifts the operator off the
+   * ground into a ballistic hop; while airborne a light upward impulse only softens the trajectory.
+   */
+  applyRecoil(impulseVx: number, impulseVy: number) {
+    if (!Number.isFinite(impulseVx) || !Number.isFinite(impulseVy)) return;
+    this.recoilVx = Math.max(-420, Math.min(420, this.recoilVx + impulseVx));
+
+    if (impulseVy < -35) {
+      const wasAir = !this.onGround;
+      this.leaveGround();
+      this.coyoteTimer = 0;
+      // From the ground the hop starts from rest; in the air the impulse cushions a fall (capped at 200).
+      this.vy = Math.max(-560, Math.min(200, (wasAir ? this.vy : 0) + impulseVy));
+    } else if (!this.onGround && impulseVy < 0) {
+      this.vy = Math.max(-560, this.vy + impulseVy * 0.5);
+    }
   }
 
   requestJump() {
@@ -126,7 +149,14 @@ export class PlatformController {
     } else {
       this.vx = moveX * speed;
     }
-    this.x = Math.max(this.options.worldBounds.minX, Math.min(this.options.worldBounds.maxX, this.x + this.vx * dt));
+    this.x = Math.max(this.options.worldBounds.minX, Math.min(this.options.worldBounds.maxX, this.x + (this.vx + this.recoilVx) * dt));
+    if (this.recoilVx !== 0) {
+      // Recoil bleeds off fast on grippy ground, slowly on slick surfaces, gently in the air.
+      const decayRate = this.onGround ? (groundProfile.traction < 0.6 ? 260 : 680) : 220;
+      const step = decayRate * dt;
+      if (Math.abs(this.recoilVx) <= step) this.recoilVx = 0;
+      else this.recoilVx -= Math.sign(this.recoilVx) * step;
+    }
 
     // 2. Jump input buffering and coyote time tracking
     if (jump) {
