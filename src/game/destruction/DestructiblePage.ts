@@ -60,8 +60,8 @@ export class DestructiblePage {
 
   hit(x: number, y: number) { return this.mask.solid(x - PAPER.x, y - PAPER.y); }
 
-  damage(x: number, y: number, radius: number, seed: number, deferRefresh = false): DamageResult {
-    const damage = this.mask.damage(x - PAPER.x, y - PAPER.y, radius, seed);
+  damage(x: number, y: number, radius: number, seed: number, deferRefresh = false, ditherWidth = 4): DamageResult {
+    const damage = this.mask.damage(x - PAPER.x, y - PAPER.y, radius, seed, ditherWidth);
     if (deferRefresh) {
       damage.dirty.forEach(index => this.pendingDirty.add(index));
     } else {
