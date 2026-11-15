@@ -1,6 +1,7 @@
 import { chromium, type Browser, type Page } from '@playwright/test';
 import type { TextRunInput } from '../game/text/DOMTextManager';
 import { PAPER } from '../game/tuning';
+import type { PlatformMaterial } from '../game/tuning';
 import { foldCount, paperHeightFor } from '../game/pageExtent';
 
 export interface ScrapedPlatform {
@@ -11,6 +12,7 @@ export interface ScrapedPlatform {
   width: number;
   height: number;
   tag: string;
+  material?: PlatformMaterial;
 }
 
 export interface ScrapedDetachable {
@@ -31,6 +33,8 @@ export interface ScrapedPageResult {
   platforms: ScrapedPlatform[];
   detachables: ScrapedDetachable[];
   textRuns?: TextRunInput[];
+  renderMode?: 'live' | 'html-fallback' | 'preset';
+  materialSummary?: Partial<Record<PlatformMaterial, number>>;
 }
 
 export interface CandidateElement {
@@ -66,6 +70,10 @@ interface CacheEntry {
 }
 
 const scrapeCache = new Map<string, CacheEntry>();
+const DNS_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_DNS_CACHE_ENTRIES = 256;
+/** hostname -> expiry timestamp, only for hosts whose DNS records were all public. */
+const dnsSafetyCache = new Map<string, number>();
 let activeScrapes = 0;
 const waitQueue: Array<() => void> = [];
 
@@ -266,6 +274,16 @@ export async function assertPublicHostname(
     return;
   }
 
+  // The DNS cache only applies to the real resolver; injected resolvers (tests) are never cached.
+  const useCache = resolver === defaultDnsLookup;
+  if (useCache) {
+    const expiresAt = dnsSafetyCache.get(cleanHost);
+    if (expiresAt !== undefined) {
+      if (Date.now() <= expiresAt) return;
+      dnsSafetyCache.delete(cleanHost);
+    }
+  }
+
   const records = await resolver(cleanHost);
   if (!records || records.length === 0) {
     throw new Error(`No se pudo resolver el host ${cleanHost}`);
@@ -275,6 +293,14 @@ export async function assertPublicHostname(
     if (isPrivateOrReservedIp(record.address)) {
       throw new SecurityBlockError('Acceso bloqueado a direcciones de red privadas o locales.');
     }
+  }
+
+  if (useCache) {
+    if (dnsSafetyCache.size >= MAX_DNS_CACHE_ENTRIES) {
+      const oldest = dnsSafetyCache.keys().next().value;
+      if (oldest) dnsSafetyCache.delete(oldest);
+    }
+    dnsSafetyCache.set(cleanHost, Date.now() + DNS_CACHE_TTL_MS);
   }
 }
 
@@ -331,6 +357,61 @@ export async function closeBrowser(): Promise<void> {
 }
 
 /**
+ * Maps a DOM candidate to the physical material of its platform.
+ */
+export function classifyPlatformMaterial(cand: CandidateElement): PlatformMaterial {
+  const tag = cand.tag.toLowerCase();
+  if (['button', 'input', 'select', 'summary'].includes(tag) || (tag === 'a' && cand.isMediaOrControl)) {
+    return 'elastic';
+  }
+  if (['img', 'figure', 'video', 'canvas', 'svg', 'picture'].includes(tag)) return 'glass';
+  if (['nav', 'pre', 'code', 'table', 'thead', 'tr', 'toolbar'].includes(tag)) return 'metal';
+  if (['h1', 'h2', 'header', 'footer', 'hr'].includes(tag)) return 'concrete';
+  if (['blockquote', 'aside', 'article', 'section', 'li', 'h3', 'h4', 'card'].includes(tag)) return 'wood';
+  return 'paper';
+}
+
+const TALL_CONTAINER_TAGS = ['article', 'section', 'table', 'aside', 'main', 'div', 'figure', 'blockquote'];
+
+/**
+ * Turns tall containers (height > 220) into walkable ledges: a roof ledge and,
+ * for containers of 260px or more, a mezzanine along their base.
+ * Normal candidates pass through untouched.
+ */
+export function expandTallContainers(candidates: CandidateElement[]): CandidateElement[] {
+  const result: CandidateElement[] = [];
+  for (const cand of candidates) {
+    if (TALL_CONTAINER_TAGS.includes(cand.tag) && cand.width >= 60 && cand.height > 220) {
+      result.push({
+        ...cand,
+        height: 22,
+        text: cand.text ? `${cand.text} [Techo]` : `<${cand.tag}>`,
+      });
+      if (cand.height >= 260) {
+        result.push({
+          ...cand,
+          y: cand.y + cand.height - 20,
+          height: 20,
+          text: `<${cand.tag} base>`,
+        });
+      }
+    } else {
+      result.push(cand);
+    }
+  }
+  return result;
+}
+
+function summarizeMaterials(platforms: ScrapedPlatform[]): Partial<Record<PlatformMaterial, number>> {
+  const summary: Partial<Record<PlatformMaterial, number>> = {};
+  for (const platform of platforms) {
+    const material = platform.material ?? 'paper';
+    summary[material] = (summary[material] ?? 0) + 1;
+  }
+  return summary;
+}
+
+/**
  * Prunes overlapping DOM candidates to produce a playable set of platforms.
  * Enforces width >= 60px, height between 16px and 220px,
  * vertical clearance of at least 42px for horizontally overlapping platforms,
@@ -343,7 +424,7 @@ export function prunePlatforms(candidates: CandidateElement[], pageHeight = VIEW
   const valid = candidates.filter(c => {
     return (
       c.width >= 60 &&
-      c.width <= 1000 &&
+      c.width <= 1088 &&
       c.height >= 16 &&
       c.height <= 220 &&
       c.x >= 0 &&
@@ -388,6 +469,7 @@ export function prunePlatforms(candidates: CandidateElement[], pageHeight = VIEW
         width: Math.round(cand.width),
         height: Math.round(cand.height),
         tag: cand.tag,
+        material: classifyPlatformMaterial(cand),
       });
     }
   }
@@ -429,10 +511,29 @@ export function extractDetachables(candidates: CandidateElement[], pageHeight = 
   }));
 }
 
+type PresetName = 'demo' | 'wikipedia' | 'github' | 'hackernews' | 'mdn';
+
+/** Assigns materials (by explicit id override or tag), render mode and material summary to a preset. */
+function finalizePreset(
+  page: ScrapedPageResult,
+  overrides: Record<string, PlatformMaterial> = {},
+): ScrapedPageResult {
+  const platforms = page.platforms.map(p => ({
+    ...p,
+    material: overrides[p.id] ?? classifyPlatformMaterial({ tag: p.tag, x: p.x, y: p.y, width: p.width, height: p.height }),
+  }));
+  return {
+    ...page,
+    platforms,
+    renderMode: 'preset',
+    materialSummary: summarizeMaterials(platforms),
+  };
+}
+
 /**
  * Generates an offline fallback preset with rich editorial typography and media.
  */
-export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPageResult {
+export function getPresetPage(name: PresetName): ScrapedPageResult {
   if (name === 'wikipedia') {
     const platforms: ScrapedPlatform[] = [
       { id: 'p1', name: 'Wikipedia Enciclopedia Libre', x: 48, y: 35, width: 280, height: 28, tag: 'h1' },
@@ -462,7 +563,7 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       { id: 'w-h3', text: 'Sección Referencias y Enlaces', x: 48, y: 340, fontSize: 18, fontFamily: 'Georgia', color: '#202122' },
     ];
 
-    return {
+    return finalizePreset({
       url: 'https://es.wikipedia.org/wiki/Especial:Aleatoria',
       title: 'Wikipedia, la enciclopedia libre',
       screenshot: '', // generated dynamically if requested
@@ -471,7 +572,7 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       platforms,
       detachables,
       textRuns,
-    };
+    }, { p8: 'glass' });
   }
 
   if (name === 'github') {
@@ -497,7 +598,7 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       { id: 'gh-about', text: 'About: Web destruction engine with Rapier2D physics', x: 760, y: 250, fontSize: 13, fontFamily: 'sans-serif', color: '#656d76' },
     ];
 
-    return {
+    return finalizePreset({
       url: 'https://github.com/luisrodriguez-rgb/My-Destroy',
       title: 'luisrodriguez-rgb/My-Destroy · GitHub',
       screenshot: '',
@@ -506,11 +607,92 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       platforms,
       detachables,
       textRuns,
-    };
+    }, { g2: 'elastic', g4: 'wood' });
+  }
+
+  if (name === 'hackernews') {
+    const platforms: ScrapedPlatform[] = [
+      { id: 'hn1', name: 'Barra naranja Hacker News', x: 48, y: 24, width: 1008, height: 32, tag: 'header' },
+      { id: 'hn2', name: 'Menú: new | past | comments | ask | show | jobs', x: 48, y: 80, width: 560, height: 28, tag: 'nav' },
+      { id: 'hn3', name: '1. Show HN: motor de destrucción web', x: 48, y: 130, width: 700, height: 34, tag: 'li' },
+      { id: 'hn4', name: '2. Por qué Rust conquista el backend', x: 48, y: 190, width: 700, height: 34, tag: 'li' },
+      { id: 'hn5', name: '3. Ask HN: ¿Qué estás construyendo?', x: 48, y: 250, width: 700, height: 34, tag: 'li' },
+      { id: 'hn6', name: '4. Física de cuerpos rígidos en 2D', x: 48, y: 310, width: 700, height: 34, tag: 'li' },
+      { id: 'hn7', name: 'Botón upvote', x: 790, y: 130, width: 140, height: 32, tag: 'button' },
+      { id: 'hn8', name: 'Botón enviar enlace', x: 790, y: 200, width: 200, height: 32, tag: 'button' },
+      { id: 'hn9', name: 'Bloque de código del hilo', x: 790, y: 270, width: 266, height: 70, tag: 'pre' },
+      { id: 'hn10', name: 'Pie: Guidelines | FAQ | API | Lists', x: 48, y: 440, width: 1008, height: 26, tag: 'footer' },
+    ];
+
+    const detachables: ScrapedDetachable[] = [
+      { id: 'hnd1', x: 48, y: 24, width: 480, height: 32, tag: 'header' },
+      { id: 'hnd2', x: 790, y: 130, width: 140, height: 32, tag: 'button' },
+      { id: 'hnd3', x: 790, y: 200, width: 200, height: 32, tag: 'button' },
+    ];
+
+    const textRuns: TextRunInput[] = [
+      { id: 'hn-logo', text: 'Hacker News', x: 60, y: 46, fontSize: 18, fontFamily: 'Verdana', color: '#000000' },
+      { id: 'hn-nav', text: 'new | past | comments | ask | show | jobs | submit', x: 52, y: 100, fontSize: 13, fontFamily: 'Verdana', color: '#828282' },
+      { id: 'hn-s1', text: 'Show HN: motor de destrucción web', x: 56, y: 153, fontSize: 14, fontFamily: 'Verdana', color: '#000000' },
+      { id: 'hn-s2', text: 'Por qué Rust conquista el backend', x: 56, y: 213, fontSize: 14, fontFamily: 'Verdana', color: '#000000' },
+      { id: 'hn-s3', text: 'Ask HN: ¿Qué estás construyendo?', x: 56, y: 273, fontSize: 14, fontFamily: 'Verdana', color: '#000000' },
+      { id: 'hn-s4', text: 'Física de cuerpos rígidos en 2D', x: 56, y: 333, fontSize: 14, fontFamily: 'Verdana', color: '#000000' },
+      { id: 'hn-up', text: '▲ upvote', x: 806, y: 152, fontSize: 13, fontFamily: 'Verdana', color: '#ff6600' },
+    ];
+
+    return finalizePreset({
+      url: 'https://news.ycombinator.com/demo',
+      title: 'Hacker News',
+      screenshot: '',
+      width: VIEWPORT_WIDTH,
+      height: VIEWPORT_HEIGHT,
+      platforms,
+      detachables,
+      textRuns,
+    });
+  }
+
+  if (name === 'mdn') {
+    const platforms: ScrapedPlatform[] = [
+      { id: 'mdn1', name: 'Cabecera MDN Web Docs', x: 48, y: 28, width: 1008, height: 36, tag: 'header' },
+      { id: 'mdn2', name: 'Migas de pan: Referencia > JavaScript', x: 48, y: 85, width: 480, height: 28, tag: 'nav' },
+      { id: 'mdn3', name: 'Array.prototype.map()', x: 48, y: 140, width: 560, height: 36, tag: 'h1' },
+      { id: 'mdn4', name: 'Descripción del método map', x: 48, y: 200, width: 560, height: 44, tag: 'p' },
+      { id: 'mdn5', name: 'Ejemplo de código interactivo', x: 640, y: 150, width: 416, height: 110, tag: 'pre' },
+      { id: 'mdn6', name: 'Tabla de compatibilidad de navegadores', x: 48, y: 275, width: 560, height: 110, tag: 'table' },
+      { id: 'mdn7', name: 'En este artículo', x: 640, y: 295, width: 416, height: 90, tag: 'aside' },
+      { id: 'mdn8', name: 'Desplegable: Ver especificaciones', x: 48, y: 398, width: 300, height: 30, tag: 'summary' },
+      { id: 'mdn9', name: 'Pie de página MDN', x: 48, y: 444, width: 1008, height: 26, tag: 'footer' },
+    ];
+
+    const detachables: ScrapedDetachable[] = [
+      { id: 'mdnd1', x: 640, y: 150, width: 416, height: 110, tag: 'pre' },
+      { id: 'mdnd2', x: 48, y: 398, width: 300, height: 30, tag: 'summary' },
+    ];
+
+    const textRuns: TextRunInput[] = [
+      { id: 'mdn-logo', text: 'MDN Web Docs', x: 60, y: 54, fontSize: 20, fontFamily: 'sans-serif', color: '#1b1b1b' },
+      { id: 'mdn-crumb', text: 'Referencia › JavaScript › Array › map()', x: 52, y: 105, fontSize: 13, fontFamily: 'sans-serif', color: '#4e4e4e' },
+      { id: 'mdn-h1', text: 'Array.prototype.map()', x: 48, y: 168, fontSize: 28, fontFamily: 'sans-serif', color: '#1b1b1b' },
+      { id: 'mdn-p', text: 'El método map() crea un nuevo array con los resultados de cada elemento.', x: 48, y: 228, fontSize: 14, fontFamily: 'sans-serif', color: '#4e4e4e' },
+      { id: 'mdn-code', text: 'const dobles = [1, 2, 3].map(x => x * 2);', x: 652, y: 190, fontSize: 13, fontFamily: 'monospace', color: '#1b1b1b' },
+      { id: 'mdn-toc', text: 'En este artículo', x: 652, y: 325, fontSize: 14, fontFamily: 'sans-serif', color: '#1b1b1b' },
+    ];
+
+    return finalizePreset({
+      url: 'https://developer.mozilla.org/demo',
+      title: 'Array.prototype.map() - JavaScript | MDN',
+      screenshot: '',
+      width: VIEWPORT_WIDTH,
+      height: VIEWPORT_HEIGHT,
+      platforms,
+      detachables,
+      textRuns,
+    });
   }
 
   // Default demo
-  return {
+  return finalizePreset({
     url: 'https://the-everyday-internet.demo',
     title: 'the everyday internet.',
     screenshot: '',
@@ -529,25 +711,241 @@ export function getPresetPage(name: 'demo' | 'wikipedia' | 'github'): ScrapedPag
       { id: 'btn-1', x: 50, y: 338, width: 142, height: 37, tag: 'button' },
       { id: 'fig-1', x: 598, y: 100, width: 458, height: 235, tag: 'figure' },
     ],
+  }, { 'footer-shelf': 'concrete', 'story-card': 'wood' });
+}
+
+// ---------------------------------------------------------------------------
+// HTML fallback: synthesize a playable page from raw HTML when Chromium is unavailable.
+// ---------------------------------------------------------------------------
+
+const FALLBACK_FETCH_TIMEOUT_MS = 5000;
+const FALLBACK_MAX_REDIRECTS = 5;
+const FALLBACK_MAX_HTML_CHARS = 600_000;
+
+interface HtmlItem {
+  tag: 'h1' | 'h2' | 'h3' | 'nav' | 'button' | 'a' | 'p' | 'img';
+  text: string;
+}
+
+function decodeHtmlEntities(text: string): string {
+  const named: Record<string, string> = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+    ndash: '–', mdash: '—', hellip: '…', copy: '©', middot: '·', raquo: '»', laquo: '«',
   };
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+    if (entity[0] === '#') {
+      const code = entity[1].toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : match;
+    }
+    return named[entity.toLowerCase()] ?? match;
+  });
+}
+
+function htmlToText(fragment: string): string {
+  return decodeHtmlEntities(fragment.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+/** Extracts title and prominent content blocks (document order) from raw HTML. */
+export function extractHtmlItems(html: string): { title: string; items: HtmlItem[] } {
+  const cleaned = html
+    .slice(0, FALLBACK_MAX_HTML_CHARS)
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(script|style|noscript|template|svg|iframe)\b[\s\S]*?<\/\1\s*>/gi, ' ');
+
+  const titleMatch = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i.exec(cleaned);
+  const title = titleMatch ? htmlToText(titleMatch[1]).slice(0, 120) : '';
+
+  const items: HtmlItem[] = [];
+  const seen = new Set<string>();
+  const counts: Record<string, number> = {};
+  const caps: Record<HtmlItem['tag'], number> = { h1: 2, h2: 4, h3: 4, nav: 1, button: 3, a: 4, p: 4, img: 2 };
+  const pattern = /<(h[1-3]|nav|button|a|p)\b[^>]*>([\s\S]*?)<\/\1\s*>|<img\b([^>]*?)\/?>/gi;
+
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(cleaned)) !== null) {
+    let tag: HtmlItem['tag'];
+    let text: string;
+    if (match[3] !== undefined) {
+      tag = 'img';
+      const attrs = match[3];
+      const alt = /\balt\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1] ?? '';
+      const src = /\bsrc\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1] ?? '';
+      text = htmlToText(alt) || decodeHtmlEntities(src.split('?')[0].split('/').pop() ?? '').slice(0, 40);
+    } else {
+      tag = match[1].toLowerCase() as HtmlItem['tag'];
+      text = htmlToText(match[2]);
+    }
+    if (tag !== 'img' && text.length < (tag === 'p' ? 20 : 3)) continue;
+    if (tag === 'img' && !text) text = 'imagen';
+    const key = `${tag}:${text}`;
+    if (seen.has(key)) continue;
+    if ((counts[tag] ?? 0) >= caps[tag]) continue;
+    seen.add(key);
+    counts[tag] = (counts[tag] ?? 0) + 1;
+    items.push({ tag, text });
+    if (items.length >= 24) break;
+  }
+  return { title, items };
+}
+
+/** Lays extracted HTML items out as candidates on a 1104-wide synthetic page. */
+function layoutHtmlItems(items: HtmlItem[]): { candidates: CandidateElement[]; height: number } {
+  const LEFT_X = 48;
+  const LEFT_W = 520;
+  const RIGHT_X = 620;
+  const RIGHT_W = 430;
+  const GAP = 52;
+  const candidates: CandidateElement[] = [];
+  const cursors = { left: 95, right: 95 };
+
+  const nav = items.find(i => i.tag === 'nav');
+  if (nav) {
+    candidates.push({ tag: 'nav', x: LEFT_X, y: 24, width: 1008, height: 34, text: nav.text });
+  } else {
+    cursors.left = 40;
+    cursors.right = 40;
+  }
+
+  const heights: Record<HtmlItem['tag'], number> = { h1: 36, h2: 32, h3: 28, nav: 34, button: 34, a: 26, p: 44, img: 110 };
+  for (const item of items) {
+    if (item.tag === 'nav') continue;
+    const wantsRight = item.tag === 'img';
+    const column: 'left' | 'right' = wantsRight ? 'right' : cursors.left <= cursors.right ? 'left' : 'right';
+    const colX = column === 'left' ? LEFT_X : RIGHT_X;
+    const colW = column === 'left' ? LEFT_W : RIGHT_W;
+    const height = heights[item.tag];
+    const isControl = item.tag === 'button' || item.tag === 'a' || item.tag === 'img';
+    const width = item.tag === 'button' || item.tag === 'a'
+      ? Math.min(colW, Math.max(100, item.text.length * 9 + 40))
+      : colW;
+    const y = cursors[column];
+    candidates.push({
+      tag: item.tag,
+      x: colX,
+      y,
+      width,
+      height,
+      text: item.text,
+      isMediaOrControl: isControl,
+    });
+    cursors[column] = y + height + GAP;
+  }
+
+  const bottom = candidates.reduce((max, c) => Math.max(max, c.y + c.height), 0);
+  return { candidates, height: paperHeightFor(bottom + 40) };
+}
+
+const FALLBACK_FONT_SIZES: Record<HtmlItem['tag'], number> = { h1: 24, h2: 20, h3: 17, nav: 13, button: 13, a: 13, p: 13, img: 12 };
+
+/** Fetches a public URL, validating every redirect hop against the SSRF rules. */
+async function fetchPublicHtml(startUrl: string): Promise<{ html: string; finalUrl: string }> {
+  let current = startUrl;
+  for (let hop = 0; hop <= FALLBACK_MAX_REDIRECTS; hop++) {
+    const target = validateUrlTarget(current);
+    await assertPublicHostname(target.hostname);
+    const response = await fetch(target.href, {
+      signal: AbortSignal.timeout(FALLBACK_FETCH_TIMEOUT_MS),
+      redirect: 'manual',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 MyDestroyDemo/1.0',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+    });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location) throw new Error('Redirección sin destino.');
+      current = new URL(location, target.href).href;
+      continue;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = (await response.text()).slice(0, FALLBACK_MAX_HTML_CHARS);
+    return { html, finalUrl: target.href };
+  }
+  throw new Error('Demasiadas redirecciones.');
+}
+
+/**
+ * Builds a playable page from the real HTML of a public URL without a browser.
+ * Returns null when the network fails; SecurityBlockError (private redirect targets) is rethrown.
+ */
+export async function fetchHtmlFallbackPage(validUrl: string): Promise<ScrapedPageResult | null> {
+  try {
+    const { html, finalUrl } = await fetchPublicHtml(validUrl);
+    const { title, items } = extractHtmlItems(html);
+    if (items.length === 0) return null;
+
+    const { candidates, height } = layoutHtmlItems(items);
+    const platforms = prunePlatforms(candidates, height);
+    if (platforms.length === 0) return null;
+    const detachables = extractDetachables(candidates, height);
+
+    const textRuns: TextRunInput[] = [];
+    for (const cand of candidates) {
+      if (cand.tag === 'img' || !cand.text) continue;
+      textRuns.push({
+        id: `run-${textRuns.length}`,
+        text: cand.text.slice(0, 80),
+        x: Math.round(cand.x + (cand.tag === 'button' ? 12 : 0)),
+        y: Math.round(cand.y + cand.height * 0.75),
+        fontSize: FALLBACK_FONT_SIZES[cand.tag as HtmlItem['tag']] ?? 14,
+        fontFamily: cand.tag.startsWith('h') ? 'Georgia' : 'sans-serif',
+        color: '#202122',
+      });
+    }
+
+    return {
+      url: finalUrl,
+      title: title || new URL(finalUrl).hostname,
+      screenshot: '', // the scene draws the synthetic canvas
+      width: VIEWPORT_WIDTH,
+      height,
+      platforms,
+      detachables,
+      textRuns,
+      renderMode: 'html-fallback',
+      materialSummary: summarizeMaterials(platforms),
+    };
+  } catch (err) {
+    if (err instanceof SecurityBlockError) throw err;
+    return null;
+  }
+}
+
+function offlineFallback(validUrl: string): ScrapedPageResult {
+  const fallback = getPresetPage('wikipedia');
+  fallback.url = validUrl;
+  fallback.title = `${validUrl} (Modo Fuera de Línea)`;
+  return fallback;
 }
 
 /**
  * Scrapes any real live URL via headless Playwright, cleans cookie overlays,
  * captures the first fold at 1104×488, and pages below that fold up to four viewports (1104×1952),
  * with deviceScaleFactor=1, and extracts pruned platforms and detachables.
+ * If Chromium is unavailable or times out, builds a page from the raw HTML instead,
+ * and only then falls back to the offline Wikipedia preset.
  */
-export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
+export async function scrapeUrl(
+  targetUrl: string,
+  options?: { forceRefresh?: boolean },
+): Promise<ScrapedPageResult> {
   const normalized = targetUrl.trim();
+  const lowered = normalized.toLowerCase();
 
   // Handle preset shortcuts
-  if (normalized.toLowerCase() === 'wikipedia' || normalized.includes('wikipedia.org/demo')) {
+  if (lowered === 'wikipedia' || normalized.includes('wikipedia.org/demo')) {
     return getPresetPage('wikipedia');
   }
-  if (normalized.toLowerCase() === 'github' || normalized.includes('github.com/demo')) {
+  if (lowered === 'github' || normalized.includes('github.com/demo')) {
     return getPresetPage('github');
   }
-  if (normalized.toLowerCase() === 'demo' || normalized.includes('the-everyday-internet.demo')) {
+  if (lowered === 'hackernews' || normalized.includes('news.ycombinator.com/demo')) {
+    return getPresetPage('hackernews');
+  }
+  if (lowered === 'mdn' || normalized.includes('developer.mozilla.org/demo')) {
+    return getPresetPage('mdn');
+  }
+  if (lowered === 'demo' || normalized.includes('the-everyday-internet.demo')) {
     return getPresetPage('demo');
   }
 
@@ -555,9 +953,11 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
   const parsedUrl = validateUrlTarget(normalized);
   const validUrl = parsedUrl.href;
 
-  const cached = getCachedScrape(validUrl);
-  if (cached) {
-    return cached;
+  if (!options?.forceRefresh) {
+    const cached = getCachedScrape(validUrl);
+    if (cached) {
+      return cached;
+    }
   }
 
   try {
@@ -567,22 +967,19 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
       throw err;
     }
     // Offline DNS failure -> fall back to preset without launching Chromium
-    const fallback = getPresetPage('wikipedia');
-    fallback.url = validUrl;
-    fallback.title = `${validUrl} (Modo Fuera de Línea)`;
-    return fallback;
+    return offlineFallback(validUrl);
   }
 
   await acquireScrapeSlot();
   try {
+    const htmlOrOffline = async (): Promise<ScrapedPageResult> =>
+      (await fetchHtmlFallbackPage(validUrl)) ?? offlineFallback(validUrl);
+
     let browser: Browser;
     try {
       browser = await getBrowser();
     } catch {
-      const fallback = getPresetPage('wikipedia');
-      fallback.url = validUrl;
-      fallback.title = `${validUrl} (Modo Fuera de Línea)`;
-      return fallback;
+      return await htmlOrOffline();
     }
 
     const context = await browser.newContext({
@@ -641,6 +1038,18 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
         });
       });
 
+      // 1b. Quick hydration: scroll incrementally so lazy content mounts before measuring.
+      await page.evaluate(async ({ step, maxY }) => {
+        const root = document.scrollingElement || document.documentElement;
+        const limit = Math.min(root?.scrollHeight ?? 0, maxY);
+        for (let y = step; y < limit; y += step) {
+          window.scrollTo(0, y);
+          await new Promise(resolve => setTimeout(resolve, 60));
+        }
+        window.scrollTo(0, 0);
+        await new Promise(resolve => setTimeout(resolve, 80));
+      }, { step: VIEWPORT_HEIGHT, maxY: PAPER.height * 4 });
+
       // The browser viewport stays one fold so 100vh pages do not stretch. Content below it is captured in place.
       await page.evaluate(() => window.scrollTo(0, 0));
       const contentHeight = await page.evaluate(() => {
@@ -652,14 +1061,15 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
 
       // 2. Extract DOM candidate elements for platforms & detachables
       const rawCandidates: CandidateElement[] = await page.evaluate(() => {
-        const selectors = 'h1, h2, h3, h4, button, a.btn, [role="button"], img, nav, blockquote, pre, table, .card, header, figure';
+        const selectors = 'h1, h2, h3, h4, button, input, select, summary, a.btn, [role="button"], img, video, canvas, nav, blockquote, pre, table, .card, header, figure, article, section, aside, main, li';
         const nodes = Array.from(document.querySelectorAll<HTMLElement>(selectors));
 
         return nodes.map(node => {
           const rect = node.getBoundingClientRect();
           const tag = node.tagName.toLowerCase();
           const text = (node.textContent || '').trim().replace(/\s+/g, ' ');
-          const isMediaOrControl = tag === 'img' || tag === 'button' || node.getAttribute('role') === 'button';
+          const isMediaOrControl = ['img', 'button', 'input', 'select', 'summary', 'video', 'canvas'].includes(tag)
+            || node.getAttribute('role') === 'button';
 
           return {
             tag,
@@ -673,7 +1083,8 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
         });
       });
 
-      const platforms = prunePlatforms(rawCandidates, captureHeight);
+      const expandedCandidates = expandTallContainers(rawCandidates);
+      const platforms = prunePlatforms(expandedCandidates, captureHeight);
       const detachables = extractDetachables(rawCandidates, captureHeight);
 
       // 3. Extract text runs for dynamic character splitting physics
@@ -722,6 +1133,8 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
         platforms,
         detachables,
         textRuns,
+        renderMode: 'live',
+        materialSummary: summarizeMaterials(platforms),
       };
       setCachedScrape(validUrl, result);
       return result;
@@ -729,11 +1142,8 @@ export async function scrapeUrl(targetUrl: string): Promise<ScrapedPageResult> {
       if (err instanceof SecurityBlockError) {
         throw err;
       }
-      // If external network fails or times out, gracefully fall back to Wikipedia preset
-      const fallback = getPresetPage('wikipedia');
-      fallback.url = validUrl;
-      fallback.title = `${validUrl} (Modo Fuera de Línea)`;
-      return fallback;
+      // Chromium failed or timed out: rebuild the page from its raw HTML, then fall back offline.
+      return await htmlOrOffline();
     } finally {
       await context.close();
     }
