@@ -16,8 +16,12 @@ El proyecto cuenta con una aplicación completamente jugable, modular y testeada
    - Borrado rectangular directo `clearRect` sin bucles trigonométricos y reconstrucción estructural mediante `repair(x, y, radius)` que restaura píxeles originales y reactiva plataformas.
    - Atlas dinámico reutilizable (`debris-atlas` de $1024 \times 1024\text{ px}$ con 128 slots de $64 \times 128\text{ px}$) para escombros y glifos sin fugas de memoria WebGL.
 
-3. **Física Rapier2D, Deconstrucción Tipográfica y Jetpack (`DebrisManager`, `DOMTextManager`, `PlatformController`)**:
+3. **Física Rapier2D, Materiales de Pisos, Multicapa y Colapsos (`DebrisManager`, `PlatformController`, `tuning.ts`)**:
    - Cuerpos rígidos en WebAssembly (`@dimforge/rapier2d-compat`) con fractura Delaunay (`delaunator`) en triángulos, cuadriláteros y esquirlas que se apilan sobre plataformas destructibles.
+   - Perfiles físicos por material (`PlatformMaterial`: `concrete`, `metal`, `wood`, `glass`, `elastic`, `paper`) parametrizados en `PLATFORM_MATERIALS` (tracción, multiplicador de salto, restitución, fricción, vano máximo y carga máxima de escombros).
+   - Apoyo multicapa en cráteres (`sampleFootingStrata`): en losas gruesas ($\ge 10\text{ px}$), la destrucción de la costra superficial permite al personaje descender a estratos internos (`craterDepth`, `y = platform.y + depthOffset`) con inclinación dinámica (`surfaceSlope`), cayendo solo al perforar el espesor completo.
+   - Dinámicas de superficie: deslizamiento por inercia en cristal por baja tracción (`vx > 0` residual tras soltar controles) y salto elástico potenciado (`jumpMultiplier = 1.32`, `lastBounceBoost = 1`).
+   - Integridad estructural en Rapier2D: detección de sobrecarga de escombros (`checkDebrisOverload`) y colapso de islas aisladas en voladizo en materiales frágiles (`syncPlatforms`), invocando el callback `onPlatformSegmentCollapse` en `FirstScene` para perforar la textura, detonar impacto físico y reproducir crujido de rotura.
    - Desprendimiento tipográfico (`DOMTextManager`) con medición exacta (`measureText`), contador $O(1)$ de glifos desprendidos y colisión caja-círculo.
    - Controlador cinemático con salto, caída voluntaria (<kbd>S</kbd>), detección continua de soporte destructible y **Jetpack propulsor** al mantener <kbd>W</kbd>, <kbd>Espacio</kbd> o Flecha Arriba en el aire.
 
@@ -29,17 +33,21 @@ El proyecto cuenta con una aplicación completamente jugable, modular y testeada
    - **05 Vórtice**: Singularidad gravitatoria con atracción centrípeta/tangencial en radio de 220 px e implosión de 56 px.
    - **Rayo Reparador Nano-Cian**: Acción secundaria mediante Clic Derecho sostenido, tecla <kbd>E</kbd> o botón `REPARAR [E]` que reconstruye la página y sus colisionadores.
 
-5. **Scraper Headless Blindado (`src/server/scraper.ts`, `vite.config.ts`)**:
-   - Captura páginas web reales (Wikipedia, sitios editoriales) y convierte sus cajas DOM en plataformas y bloques desprendibles.
-   - Protección anti-SSRF con resolución DNS previa contra DNS rebinding (bloqueo de rangos privados IPv4/IPv6), intercepción de sub-peticiones en Playwright, límite de payload (4 KB), cola de concurrencia (máx. 2 instancias) y caché LRU en memoria.
-   - Habilitado tanto en `npm run dev` como en `npm run preview`.
+5. **Inyección de Páginas Web y Scraper Blindado (`src/server/scraper.ts`, `vite.config.ts`, `App.tsx`)**:
+   - Captura páginas web reales mediante Playwright headless, convierte el árbol DOM en plataformas jugables y bloques desprendibles.
+   - Enrutamiento y deep-linking: soporte de parámetro `?url=` para cargar escenarios compartidos, botón de copiado de link con confirmación visual (toast) y presets rápidos enriquecidos (`wikipedia`, `github`, `hackernews`, `mdn`, `demo`).
+   - Endpoint HTTP unificado (`GET` y `POST /api/scrape`): soporta parámetro `forceRefresh`, maneja concurrencia con cola acotada y responde código HTTP 429 cuando la cola está saturada.
+   - Clasificación inteligente de materiales (`classifyPlatformMaterial`): asigna materiales físicos (`elastic` para botones y controles, `glass` para imágenes/videos, `metal` para barras de navegación/código/tablas, `concrete` para titulares/cabeceras/pies, `wood` para citas/asides/artículos, `paper` para texto y contenedores).
+   - División de contenedores altos (`expandTallContainers`): descompone cajas $\ge 60\text{ px}$ y $> 220\text{ px}$ en cornisas caminables de techo y base para evitar que sean descartadas en la poda de plataformas.
+   - Poda respetuosa (`prunePlatforms`): preserva barras de navegación de ancho completo (hasta 1040 px) y asegura un espaciado vertical mínimo de 42 px.
+   - Seguridad y resiliencia anti-SSRF: caché DNS (`assertPublicHostname`), bloqueo de rangos privados/locales/metadata IPv4 e IPv6, y fallback HTML seguro sin navegador (`fetchHtmlFallbackPage`) que extrae estructura, titulares y bloques ante timeouts o indisponibilidad de Chromium.
 
 6. **Audio Procedural y Controles Táctiles Móviles (`ShotAudio.ts`, `App.tsx`)**:
-   - Síntesis en tiempo real con Web Audio API para las 5 armas, el siseo del jetpack (`jetpackHiss`) y el pulso armónico de reparación (`repairPulse`).
-   - Cruceta táctil responsiva (`◀`, `▶`, `▲`, `▼`) y botón de reparación para pantallas táctiles.
+   - Síntesis en tiempo real con Web Audio API para las 5 armas, el siseo del jetpack (`jetpackHiss`), el crujido de colapso de plataformas (`debrisCrack`) y el pulso armónico de reparación (`repairPulse`).
+   - Cruceta táctil responsiva (`◀`, `▶`, `▲`, `▼`), barra de acciones móviles, selector de presets y botón de reparación para pantallas táctiles.
 
 7. **Batería de Pruebas Automatizadas y Build Optimizado**:
-   - **42 pruebas unitarias en Vitest** (máscaras, borrado directo, reparación, cinemática, físicas Rapier2D, glifos, armas y seguridad SSRF/caché del scraper).
+   - **59 pruebas unitarias en Vitest** (máscaras, borrado directo, reparación, cinemática multicapa, deslizamiento en cristal, salto elástico, colapsos por sobrecarga e islas Rapier2D, glifos tipográficos, armas, clasificación de materiales DOM, expansión de contenedores y seguridad SSRF/caché/presets del scraper).
    - **4 suites E2E en Playwright** (`scene.spec.ts`, `scraper.spec.ts`, `capture.spec.ts`, `stress.spec.ts`).
    - Separación de chunks en Vite (`phaser`, `rapier`, `createGame`, `index`).
 

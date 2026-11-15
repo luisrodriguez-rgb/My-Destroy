@@ -60,17 +60,23 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
   - Renderiza la textura de la página por bloques regionales en el canvas de Phaser.
   - **Carbonización y Chispas Incandescentes**: Dibuja un ribete de carbón oscuro (`#17110dee`), un halo de sombra quemada (`#3c241566`) y partículas incandescentes de brasa (`#ff6b00ee`) sobre las celdas sólidas que bordean un agujero.
 
-### D. Físicas Rígidas y Fractura Poligonal (`src/game/physics/`)
+### D. Físicas Rígidas, Materiales y Fractura Poligonal (`src/game/physics/`)
+- **`tuning.ts` (`PlatformMaterial` y `PLATFORM_MATERIALS`)**:
+  - Define 6 materiales de plataforma (`concrete`, `metal`, `wood`, `glass`, `elastic`, `paper`) con propiedades físicas diferenciadas: tracción (`traction`), multiplicador de salto (`jumpMultiplier`), restitución, fricción, vano máximo no soportado (`maxUnsupportedSpan`), carga máxima de escombros (`maxLoad`) y profundidad de losa (`slabDepth`).
 - **`DebrisManager.ts`**:
   - Genera fractura geométrica variada: triángulos texturizados afilados (`delaunator`), polígonos cuadriláteros irregulares y esquirlas alargadas de papel rasgado (*splinters*).
   - Simula los escombros mediante el motor de física de cuerpos rígidos `@dimforge/rapier2d-compat` (WASM).
   - Cada fragmento posee un colisionador de triángulo (`RAPIER.ColliderDesc.triangle`) o cuboid, restituyendo rebotes elásticos y fricción real.
-  - Los trozos colisionan contra el suelo de la pasarela y las 7 plataformas geométricas, **acumulándose en pilas físicas persistentes** a los pies del jugador.
+  - Los trozos colisionan contra el suelo de la pasarela y las plataformas geométricas, **acumulándose en pilas físicas persistentes** a los pies del jugador.
   - Administra un límite estricto de capacidad (`maxDebris = 120`) con reciclaje automático para garantizar 60 FPS sostenidos.
+  - **Colapso estructural por sobrecarga (`checkDebrisOverload`)**: si la cantidad de escombros acumulados sobre un segmento excede su `maxLoad` (p. ej. 4 piezas en cristal), el colisionador Rapier2D colapsa (`collapsedByOverload`), desaloja las piezas y dispara `onPlatformSegmentCollapse`.
+  - **Colapso de islas en voladizo (`syncPlatforms`)**: en materiales frágiles (`glass`, `paper`, `wood`), segmentos aislados flanqueados por huecos colapsan por inestabilidad (`collapsedByInstability`), alertando a `onPlatformSegmentCollapse`.
 - **`PlatformController.ts`**:
   - Implementa un modelo cinemático determinista para el operario (sin depender de simulaciones pesadas de físicas como Arcade o Matter).
-  - Consulta las 7 plataformas geométricas definidas en `demoPlatforms.ts` (tarjetas, botones, barras de la página) y el suelo indestructible de la pasarela (`y = 530`).
-  - **Detección de soporte destructible**: en cada fotograma, muestrea la solidez de la plataforma en los pies del jugador (`PlatformController.isFootingSolid()`). Si un disparo abre un agujero en ese punto, el soporte se cancela de inmediato y el jugador cae por aceleración de gravedad.
+  - Consulta las plataformas geométricas y el suelo indestructible de la pasarela (`y = 530`).
+  - **Muestreo multicapa en cráteres (`sampleFootingStrata`)**: en losas con `height >= 10`, si la costra superficial (`y + 2`) está perforada, muestrea estratos internos a `dy = 6` y `dy = 10`. El personaje desciende dentro del cráter (`craterDepth = depthOffset`, `y = platform.y + depthOffset`) e inclina sus pies según el desnivel entre apoyos (`surfaceSlope`), cayendo solo si todos los estratos son perforados.
+  - **Tracción e inercia por material**: en materiales de baja tracción (`profile.traction < 0.6`, ej. `glass`), la velocidad horizontal `vx` no se detiene en seco al soltar el mando, conservando inercia y produciendo un deslizamiento fluido.
+  - **Rebote elástico**: al saltar desde plataformas elásticas (`material: 'elastic'`), aplica `jumpMultiplier = 1.32`, activa `lastBounceBoost = 1` y alcanza una altitud mayor.
   - **Jetpack Propulsor Integrado**: al mantener presionado <kbd>W</kbd>, <kbd>Espacio</kbd> o <kbd>ArrowUp</kbd> en el aire, se activa la propulsión vertical continua (`jetpackThrust: 1720 px/s²`) permitiendo al jugador volar, flotar y ascender libremente por toda la pantalla hasta alcanzar los títulos superiores de la página. Renderiza llamaradas dinámicas de plasma y chispas procedimentales desde la mochila del operario.
   - Gestiona salto elástico, caída voluntaria (*drop*) con <kbd>S</kbd>, *coyote time* (100 ms) y *jump buffer* (120 ms).
 
@@ -99,4 +105,20 @@ Este documento describe la arquitectura modular implementada en el proyecto, det
 - **Borrado de la superficie (`surface.clearArea`)**: elimina la silueta del carácter en la textura de papel para evitar glifos fantasma duplicados, descubriendo el sustrato digital interactivo.
 - **Cuerpos rígidos dinámicos en Rapier2D (`spawnLetterDebris`)**: proyecta las letras con impulso radial, elevación y torque de rotación con colisionadores cuboid y detección continua de colisiones (CCD), posándose y rebotando sobre pasarelas y plataformas.
 - **Interacción gravitacional**: las letras libres responden a `applyVortexPull()`, orbitando en espiral hacia el centro del vórtice antes de su desintegración.
+
+### H. Inyección de Páginas y Scraper Blindado (`src/server/scraper.ts`, `vite.config.ts`, `App.tsx`)
+- **Captura Dual (Playwright / Fallback HTML)**:
+  - Captura páginas web en vivo mediante Chromium headless (`capturePagePng`, limpieza de popups/modales de consentimiento, renderizado a $1104 \times 488\text{ px}$ en viewport y hasta 4 pliegues).
+  - Fallback HTML seguro (`fetchHtmlFallbackPage`): en caso de timeout, ausencia de Chromium o entornos sin soporte de renderizado, descarga el HTML público (siguiendo hasta 5 redirecciones públicas), extrae etiquetas (`extractHtmlItems`), sintetiza el layout (`layoutHtmlItems`) y genera plataformas y textos sin ejecutar scripts de terceros.
+- **Clasificación y Adaptación de Geometría DOM**:
+  - `classifyPlatformMaterial(cand)`: asocia elementos HTML a materiales físicos (`elastic` para botones y controles, `glass` para imágenes y videos, `metal` para barras de navegación, código y tablas, `concrete` para cabeceras y títulos principales, `wood` para bloques editoriales y citas, `paper` para texto plano).
+  - `expandTallContainers(candidates)`: transforma contenedores altos ($> 220\text{ px}$) en cornisas caminables de techo y base para mantener transitable la página sin generar muros infranqueables.
+  - `prunePlatforms(candidates)`: filtra solapamientos, impone un espaciado vertical mínimo de 42 px y preserva barras de navegación de ancho completo (hasta 1040 px).
+- **Seguridad SSRF y Caché**:
+  - `validateUrlTarget(url)`: rechaza esquemas no-HTTP, credenciales incrustadas y destinos localhost o de red interna.
+  - `assertPublicHostname(host)`: valida los registros DNS contra rangos privados, CGNAT, link-local, multicast e IP de metadatos de nube, utilizando una caché de seguridad DNS (`dnsSafetyCache`) con TTL de 5 minutos.
+- **Presets Editoriales y Deep-Linking**:
+  - Presets preconfigurados y optimizados (`wikipedia`, `github`, `hackernews`, `mdn`, `demo`) con `renderMode: 'preset'` y desglose de materiales (`materialSummary`).
+  - Deep-linking mediante parámetro de consulta `?url=`, actualización de historial con `replaceState` y botón para copiar enlace con confirmación visual.
+  - Endpoint de servidor `/api/scrape` accesible vía `POST` y `GET` (con soporte para `forceRefresh`), cola de espera para scraping concurrente y código HTTP 429 ante sobrecarga.
 
