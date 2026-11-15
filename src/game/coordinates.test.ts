@@ -13,3 +13,8 @@ it('uses the canvas bounds instead of its taller letterboxed container', () => {
   expect(point.x).toBe(576);
   expect(point.y).toBeCloseTo(291.2);
 });
+
+it('adds the vertical camera scroll after scaling the view', () => {
+  const point = screenToWorld(600, 392, { left: 24, top: 100, width: 1152, height: 584 }, { scrollY: 488 });
+  expect(point).toEqual({ x: 576, y: 292 + 488 });
+});

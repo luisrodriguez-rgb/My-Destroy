@@ -1,14 +1,22 @@
 import * as Phaser from 'phaser';
 import { DestructiblePage } from '../destruction/DestructiblePage';
 import { ShotAudio } from '../audio/ShotAudio';
-import { COLORS, PAPER, WORLD } from '../tuning';
+import { COLORS, PAPER, PLATFORM_MATERIALS, WORLD, type PlatformMaterial } from '../tuning';
+import { clampCameraY, paperHeightFor, worldForPaper } from '../pageExtent';
 import type { Preferences, SceneCallbacks, WeaponId } from '../bridge';
 import { screenToWorld } from '../coordinates';
 import { PlatformController } from '../physics/PlatformController';
 import { getDemoPlatforms, type Platform } from '../platforms/demoPlatforms';
 import { drawDemoPage, getDemoTextRuns } from '../fixtures/demoPage';
 import type { ScrapedPageResult } from '../../server/scraper';
-import { WEAPONS, WEAPON_ORDER, calculateSpreadAngles } from '../weapons/weapons';
+import {
+  WEAPONS,
+  WEAPON_ORDER,
+  calculateSpreadAngles,
+  computeEffectiveDamageRadius,
+  computeKnockbackVector,
+  generateClusterImpacts,
+} from '../weapons/weapons';
 import type { WeaponConfig } from '../weapons/types';
 import { DebrisManager } from '../physics/DebrisManager';
 import { DOMTextManager } from '../text/DOMTextManager';
@@ -17,7 +25,10 @@ type Fragment = { image: Phaser.GameObjects.Image; vx: number; vy: number; spin:
 type Dust = { x: number; y: number; vx: number; vy: number; life: number; duration: number; size: number; color: number };
 type ShotTracer = { mx: number; my: number; x: number; y: number; hit: boolean };
 type Grenade = { x: number; y: number; vx: number; vy: number; fuse: number; blastRadius: number; angle: number; spin: number };
-type Vortex = { x: number; y: number; vx: number; vy: number; fuse: number; maxFuse: number; blastRadius: number; angle: number; spin: number };
+type Vortex = { x: number; y: number; vx: number; vy: number; fuse: number; maxFuse: number; blastRadius: number; angle: number; spin: number; erodeTimer: number };
+type ShockwaveRing = { x: number; y: number; maxRadius: number; color: number; life: number; duration: number; lineWidth: number };
+type ShellCasing = { x: number; y: number; vx: number; vy: number; angle: number; spin: number; life: number; color: number; w: number; h: number };
+type FloatingPopup = { node: Phaser.GameObjects.Text; vy: number; life: number; duration: number };
 
 export interface ActiveDetachable {
   id: string;
@@ -70,9 +81,25 @@ export class FirstScene extends Phaser.Scene {
   private resets = 0;
   private paused = false;
   private phase = 0;
+  private lastNotifiedMaterial: PlatformMaterial = 'metal';
+  private lastNotifiedCraterDepth = 0;
+  private laserHeat = 0;
+  private comboCount = 0;
+  private comboTimer = 0;
+  private lastNotifiedCombo = 0;
+  private lastNotifiedHeatBucket = 0;
+  private lastLaserComboTime = -1000;
+  private shockwaves: ShockwaveRing[] = [];
+  private casings: ShellCasing[] = [];
+  private popups: FloatingPopup[] = [];
+  private layout = worldForPaper(PAPER.height);
+  private worldGraphics!: Phaser.GameObjects.Graphics;
+  private floorMark!: Phaser.GameObjects.Text;
+  private floorStatus!: Phaser.GameObjects.Text;
+  private debrisMaskGraphics!: Phaser.GameObjects.Graphics;
 
   get playerX() { return this.controller ? this.controller.x : 350; }
-  get playerY() { return this.controller ? this.controller.y : WORLD.floor - 4; }
+  get playerY() { return this.controller ? this.controller.y : this.layout.floor - 4; }
   get currentWeapon(): WeaponConfig { return WEAPONS[this.currentWeaponId as WeaponId]; }
 
   constructor(private prefs: Preferences, private callbacks: SceneCallbacks) { super('FirstScene'); }
@@ -83,20 +110,20 @@ export class FirstScene extends Phaser.Scene {
     this.buildWorld();
     this.surface = new DestructiblePage(this);
     this.controller = new PlatformController({
-      floorY: WORLD.floor - 4,
+      floorY: this.layout.floor - 4,
       worldBounds: { minX: 48, maxX: 1104 },
       platforms: this.currentPlatforms,
       isSolid: (x, y) => this.surface.hit(x, y),
-    }, 350, WORLD.floor - 4);
+    }, 350, this.layout.floor - 4);
     this.buildPlayer();
     this.effects = this.add.graphics().setDepth(50);
     this.reticle = this.add.graphics().setDepth(60);
     this.audio.setMuted(this.prefs.muted);
 
     this.debrisLayer = this.add.container(0, 0).setDepth(26);
-    const debrisMaskGraphics = this.make.graphics();
-    debrisMaskGraphics.fillStyle(0xffffff).fillRect(0, 0, WORLD.width, 530);
-    this.debrisLayer.setMask(debrisMaskGraphics.createGeometryMask());
+    this.debrisMaskGraphics = this.make.graphics();
+    this.paintDebrisMask();
+    this.debrisLayer.setMask(this.debrisMaskGraphics.createGeometryMask());
 
     const ATLAS_COLS = 16;
     const ATLAS_SLOT = 64;
@@ -222,6 +249,21 @@ export class FirstScene extends Phaser.Scene {
         }
         this.textures.remove(frameKey);
       },
+      onPlatformSegmentCollapse: (seg) => {
+        this.surface.clearArea(
+          Math.max(0, seg.cx - seg.width / 2 - PAPER.x),
+          Math.max(0, seg.cy - 2 - PAPER.y),
+          seg.width,
+          Math.max(8, seg.height),
+          true,
+        );
+        this.surface.flushDirty();
+        this.emitImpact(seg.cx, seg.cy, Math.PI / 2, 14, 5);
+        this.spawnShockwave(seg.cx, seg.cy, Math.max(28, seg.width * 1.4), COLORS.amber, 260, 2.5);
+        this.spawnPopup(seg.cx, seg.cy - 10, '¡COLAPSO!', '#ffb454');
+        this.audio.debrisCrack();
+        this.notify();
+      },
     });
     void this.debrisManager.init();
     this.initDemoDetachables();
@@ -286,7 +328,19 @@ export class FirstScene extends Phaser.Scene {
   private pointerPosition(pointer: Phaser.Input.Pointer) {
     const event = pointer.event as MouseEvent & { changedTouches?: TouchList };
     const point = event.changedTouches?.[0] ?? event;
-    return screenToWorld(point.clientX, point.clientY, this.game.canvas.getBoundingClientRect());
+    const camera = this.cameras.main;
+    return screenToWorld(point.clientX, point.clientY, this.game.canvas.getBoundingClientRect(), {
+      scrollX: camera.scrollX,
+      scrollY: camera.scrollY,
+    });
+  }
+
+  private refreshAim() {
+    if (!this.inside || !this.input.activePointer?.event) return;
+    const event = this.input.activePointer.event as MouseEvent & { changedTouches?: TouchList };
+    const point = event.changedTouches?.[0] ?? event;
+    if (!Number.isFinite(point.clientX) || !Number.isFinite(point.clientY)) return;
+    this.aim = this.pointerPosition(this.input.activePointer);
   }
   private onLeave = () => { this.inside = false; this.keys.clear(); };
   private onContextMenu = (event: Event) => event.preventDefault();
@@ -327,8 +381,25 @@ export class FirstScene extends Phaser.Scene {
     }
   }
   setPreferences(value: Preferences) { this.prefs = value; this.audio.setMuted(value.muted); }
-  setPaused(value: boolean) { this.paused = value; this.keys.clear(); if (value) { this.audio.stop(); this.lastShot = undefined; } this.notify(); }
+  setPaused(value: boolean) {
+    this.paused = value;
+    this.keys.clear();
+    if (value) {
+      this.audio.stop();
+      this.lastShot = undefined;
+      this.lastLaserPoint = null;
+    }
+    this.notify();
+  }
+
   private notify() {
+    const currentMaterial = this.controller ? this.controller.currentMaterial : 'metal';
+    const craterDepth = this.controller ? this.controller.craterDepth : 0;
+    const laserHeat = Number(this.laserHeat.toFixed(2));
+    this.lastNotifiedMaterial = currentMaterial;
+    this.lastNotifiedCraterDepth = craterDepth;
+    this.lastNotifiedCombo = this.comboCount;
+    this.lastNotifiedHeatBucket = Math.round(this.laserHeat * 20);
     this.callbacks.update({
       shots: this.shots,
       hits: this.hits,
@@ -336,18 +407,100 @@ export class FirstScene extends Phaser.Scene {
       paused: this.paused,
       ready: true,
       weapon: this.currentWeaponId,
+      currentMaterial,
+      craterDepth,
+      combo: this.comboCount,
+      laserHeat,
     });
+  }
+
+  private applyPageExtent(paperHeight: number) {
+    const next = worldForPaper(paperHeight);
+    const changed = next.paperHeight !== this.layout.paperHeight;
+    this.layout = next;
+    if (changed) {
+      this.surface?.setPageHeight(next.paperHeight);
+      if (this.worldGraphics) this.paintWorld();
+      const labelY = next.floor - 4 + 33;
+      this.floorMark?.setPosition(28, labelY);
+      this.floorStatus?.setPosition(1002, labelY);
+      this.paintDebrisMask();
+      this.cameras.main.setBounds(0, 0, next.width, next.height);
+    }
+    this.controller?.setFloor(next.floor - 4);
+    this.debrisManager?.setWorldExtent(next.height, next.floor - 4, next.paperHeight);
+    this.syncCamera();
+  }
+
+  private paintDebrisMask() {
+    if (!this.debrisMaskGraphics) return;
+    this.debrisMaskGraphics.clear();
+    this.debrisMaskGraphics.fillStyle(0xffffff).fillRect(0, 0, WORLD.width, this.layout.floor - 4);
+  }
+
+  private syncCamera() {
+    if (!this.controller) return;
+    const maxScroll = Math.max(0, this.layout.height - WORLD.height);
+    const scrollY = Math.round(clampCameraY(this.controller.y, this.layout.height, WORLD.height));
+    this.cameras.main.setScroll(0, Math.min(maxScroll, Math.max(0, scrollY)));
   }
 
   private buildWorld() {
     this.cameras.main.setBackgroundColor('#081017');
-    const g = this.add.graphics();
+    this.cameras.main.setBounds(0, 0, this.layout.width, this.layout.height);
+    this.worldGraphics = this.add.graphics();
+    this.paintWorld();
+
+    // High-visibility machinery sprites from industrial tileset
+    for (const [x, y, frame] of [
+      [747, 222, 267], [1044, 353, 268], [400, 329, 287], [109, 90, 267],
+      [230, 260, 287], [630, 300, 267], [920, 260, 285],
+    ]) {
+      this.add.image(x, y, 'industrial', frame).setScale(3).setTint(0x00f5d4).setAlpha(0.85);
+    }
+
+    // Illuminated industrial signage
+    this.add.text(760, 426, 'CORE REACTOR // SUB-LEVEL 01', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#00f5d4',
+      letterSpacing: 3,
+    });
+    this.add.text(760, 444, 'CONTAINMENT GRID • NOMINAL', {
+      fontFamily: 'monospace',
+      fontSize: '9px',
+      color: '#ffb454',
+      letterSpacing: 2,
+    });
+
+    const labelY = this.layout.floor - 4 + 33;
+    this.floorMark = this.add.text(28, labelY, 'SECTOR 01  /  CÁMARA DE PRUEBAS', { fontFamily: 'monospace', fontSize: '9px', color: '#647c89', letterSpacing: 2 });
+    this.floorStatus = this.add.text(1002, labelY, 'CORE • ONLINE', { fontFamily: 'monospace', fontSize: '9px', color: '#00f5d4' });
+  }
+
+  private paintWorld() {
+    const g = this.worldGraphics;
+    g.clear();
+    const paperHeight = this.layout.paperHeight;
+    const floorTop = this.layout.floor - 4;
+    const columnHeight = floorTop - 20;
+    const girderYs = [138, 388];
+    if (paperHeight > PAPER.height) {
+      const folds = Math.ceil(paperHeight / PAPER.height);
+      for (let fold = 1; fold < folds; fold++) {
+        for (const base of [138, 388]) {
+          const y = base + fold * PAPER.height;
+          if (y < floorTop - 30) girderYs.push(y);
+        }
+      }
+    }
+
     // Subterranean facility hull
-    g.fillStyle(0x0e1b26).fillRect(24, 22, 1104, 488);
+    g.fillStyle(0x0e1b26).fillRect(24, 22, 1104, paperHeight);
 
     // High-contrast cyber grid with cyan node points
     for (let x = 28; x < WORLD.width; x += 48) {
-      for (let y = 20; y < 530; y += 48) {
+      for (let y = 20; y < floorTop; y += 48) {
         g.lineStyle(1, 0x1d4658, 0.45).strokeRect(x, y, 48, 48);
         g.fillStyle(0x00f5d4, 0.5).fillRect(x + 1, y + 1, 3, 3);
       }
@@ -355,16 +508,16 @@ export class FirstScene extends Phaser.Scene {
 
     // Heavy vertical structural columns with illuminated cyan power bus lines
     for (const x of [70, 290, 520, 760, 990]) {
-      g.fillStyle(0x08131d).fillRect(x, 20, 28, 510);
-      g.fillStyle(0x234d5f).fillRect(x, 20, 4, 510);
-      g.fillStyle(0x00e5ff, 0.75).fillRect(x + 12, 20, 4, 510);
-      for (let y = 32; y < 520; y += 48) {
+      g.fillStyle(0x08131d).fillRect(x, 20, 28, columnHeight);
+      g.fillStyle(0x234d5f).fillRect(x, 20, 4, columnHeight);
+      g.fillStyle(0x00e5ff, 0.75).fillRect(x + 12, 20, 4, columnHeight);
+      for (let y = 32; y < floorTop - 10; y += 48) {
         g.fillStyle(0x79e3d8).fillRect(x + 5, y, 4, 4);
       }
     }
 
     // Heavy horizontal support girders with amber hazard stripes and glowing conduits
-    for (const y of [138, 388]) {
+    for (const y of girderYs) {
       g.fillStyle(0x0a1620).fillRect(30, y, 1080, 22);
       // Hazard diagonal stripes
       for (let sx = 34; sx < 1100; sx += 24) {
@@ -413,41 +566,17 @@ export class FirstScene extends Phaser.Scene {
       }
     }
 
-    // High-visibility machinery sprites from industrial tileset
-    for (const [x, y, frame] of [
-      [747, 222, 267], [1044, 353, 268], [400, 329, 287], [109, 90, 267],
-      [230, 260, 287], [630, 300, 267], [920, 260, 285],
-    ]) {
-      this.add.image(x, y, 'industrial', frame).setScale(3).setTint(0x00f5d4).setAlpha(0.85);
-    }
-
-    // Illuminated industrial signage
-    this.add.text(760, 426, 'CORE REACTOR // SUB-LEVEL 01', {
-      fontFamily: 'monospace',
-      fontSize: '12px',
-      color: '#00f5d4',
-      letterSpacing: 3,
-    });
-    this.add.text(760, 444, 'CONTAINMENT GRID • NOMINAL', {
-      fontFamily: 'monospace',
-      fontSize: '9px',
-      color: '#ffb454',
-      letterSpacing: 2,
-    });
-
     // Catwalk floor construction
-    g.fillStyle(0x050b12).fillRect(0, 530, 1152, 54);
-    g.fillStyle(0x30414b).fillRect(0, 534, 1152, 4);
-    for (let x = 0; x < 1152; x += 32) {
-      g.fillStyle(0x1d2d37).fillRect(x, 546, 24, 3);
-      if (x < 192 || x > 960) g.fillStyle(0xffb454, 0.45).fillRect(x, 536, 14, 4);
+    g.fillStyle(0x050b12).fillRect(0, floorTop, WORLD.width, this.layout.height - floorTop);
+    g.fillStyle(0x30414b).fillRect(0, this.layout.floor, WORLD.width, 4);
+    for (let x = 0; x < WORLD.width; x += 32) {
+      g.fillStyle(0x1d2d37).fillRect(x, floorTop + 16, 24, 3);
+      if (x < 192 || x > 960) g.fillStyle(0xffb454, 0.45).fillRect(x, floorTop + 6, 14, 4);
     }
-    this.add.text(28, 563, 'SECTOR 01  /  CÁMARA DE PRUEBAS', { fontFamily: 'monospace', fontSize: '9px', color: '#647c89', letterSpacing: 2 });
-    this.add.text(1002, 563, 'CORE • ONLINE', { fontFamily: 'monospace', fontSize: '9px', color: '#00f5d4' });
   }
 
   private buildPlayer() {
-    this.shadow = this.add.ellipse(this.controller.x, WORLD.floor - 2, 46, 8, 0x000000, 0.42).setDepth(19);
+    this.shadow = this.add.ellipse(this.controller.x, this.layout.floor - 2, 46, 8, 0x000000, 0.42).setDepth(19);
     const body = this.add.graphics();
     // High-tech Jetpack backpack on player's back
     body.fillStyle(0x192834).fillRect(-21, -38, 9, 21); // Dark chassis
@@ -469,6 +598,100 @@ export class FirstScene extends Phaser.Scene {
     this.arm = this.add.graphics().setDepth(31);
   }
 
+  private getImpactMaterial(x: number, y: number): PlatformMaterial {
+    for (const p of this.currentPlatforms) {
+      if (
+        x >= p.x - 6 &&
+        x <= p.x + p.width + 6 &&
+        y >= p.y - 10 &&
+        y <= p.y + Math.max(16, p.height + 10)
+      ) {
+        return p.material ?? 'paper';
+      }
+    }
+    return 'paper';
+  }
+
+  private spawnShockwave(x: number, y: number, maxRadius: number, color: number, duration = 260, lineWidth = 2) {
+    if (this.prefs.reducedMotion) return;
+    if (this.shockwaves.length >= 28) this.shockwaves.shift();
+    this.shockwaves.push({ x, y, maxRadius, color, life: duration, duration, lineWidth });
+  }
+
+  private ejectCasing(x: number, y: number, baseAngle: number, weaponId: 'pistol' | 'shotgun' | 'grenade') {
+    if (this.prefs.reducedMotion) return;
+    if (this.casings.length >= 48) this.casings.shift();
+    const dir = Math.cos(baseAngle) >= 0 ? -1 : 1;
+    const color = weaponId === 'shotgun' ? 0xd9383a : weaponId === 'grenade' ? 0x8ea352 : 0xffd166;
+    const w = weaponId === 'pistol' ? 4 : weaponId === 'shotgun' ? 6 : 7;
+    const h = weaponId === 'pistol' ? 2 : weaponId === 'shotgun' ? 3 : 4;
+    this.casings.push({
+      x,
+      y,
+      vx: dir * (55 + Math.random() * 65),
+      vy: -(110 + Math.random() * 75),
+      angle: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 18,
+      life: 900,
+      color,
+      w,
+      h,
+    });
+  }
+
+  private spawnPopup(x: number, y: number, text: string, color = '#ffb454') {
+    while (this.popups.length >= 10) {
+      const oldest = this.popups.shift();
+      oldest?.node.destroy();
+    }
+    const reduced = this.prefs.reducedMotion;
+    const duration = reduced ? 420 : 720;
+    const px = Phaser.Math.Clamp(x, 60, WORLD.width - 60);
+    const py = Phaser.Math.Clamp(y - 12, 36, this.layout.floor - 20);
+    const node = this.add.text(px, py, text, {
+      fontFamily: 'monospace',
+      fontSize: reduced ? '10px' : '12px',
+      fontStyle: 'bold',
+      color,
+      stroke: '#0b1018',
+      strokeThickness: 3,
+    }).setOrigin(0.5).setDepth(65);
+    if (reduced) node.setAlpha(0.82);
+    this.popups.push({
+      node,
+      vy: reduced ? 0 : -34,
+      life: duration,
+      duration,
+    });
+  }
+
+  private registerComboHit(x: number, y: number, _material: PlatformMaterial, mult: number, customLabel?: string) {
+    this.comboTimer = 2.4;
+    this.comboCount++;
+    let label = customLabel ?? '';
+    let color = '#ffb454';
+    if (!label) {
+      if (mult >= 1.3 && this.comboCount >= 2) {
+        label = `COMBO x${this.comboCount} · ¡CRÍTICO!`;
+        color = '#79e3d8';
+      } else if (mult >= 1.3) {
+        label = '¡CRÍTICO!';
+        color = '#79e3d8';
+      } else if (this.comboCount >= 2) {
+        label = `COMBO x${this.comboCount}`;
+        color = this.comboCount >= 5 ? '#ff55aa' : '#ffb454';
+      }
+    } else {
+      color = '#9b5de5';
+    }
+    if (label) {
+      this.spawnPopup(x, y, label, color);
+    }
+    if (this.comboCount >= 2) {
+      this.audio.comboChime(this.comboCount);
+    }
+  }
+
   private shoot() {
     const now = this.time.now;
     const weapon = this.currentWeapon;
@@ -479,6 +702,14 @@ export class FirstScene extends Phaser.Scene {
     const baseAngle = Math.atan2(this.aim.y - shoulderY, this.aim.x - this.controller.x);
     const mx = this.controller.x + Math.cos(baseAngle) * 38;
     const my = shoulderY + Math.sin(baseAngle) * 38;
+
+    // Physical recoil and camera shake on shot
+    const traction = PLATFORM_MATERIALS[this.controller.currentMaterial].traction;
+    const kb = computeKnockbackVector(baseAngle, this.currentWeaponId, this.controller.onGround, traction);
+    this.controller.applyRecoil(kb.vx, kb.vy);
+    if (!this.prefs.reducedMotion) {
+      this.cameras.main.shake(weapon.shakeDuration, weapon.shakeIntensity);
+    }
 
     // 1. GRENADE LAUNCHER
     if (this.currentWeaponId === 'grenade') {
@@ -496,6 +727,7 @@ export class FirstScene extends Phaser.Scene {
         angle: baseAngle,
         spin: (Math.random() - 0.5) * 8,
       });
+      this.ejectCasing(this.controller.x + Math.cos(baseAngle) * 18, shoulderY + Math.sin(baseAngle) * 18, baseAngle, 'grenade');
       this.lastShot = {
         time: now,
         flash: weapon.flash,
@@ -513,6 +745,7 @@ export class FirstScene extends Phaser.Scene {
       const dist = Math.max(140, Math.hypot(this.aim.x - mx, this.aim.y - my));
       const tracers: ShotTracer[] = [];
       let anyHit = false;
+      let bestHit: { x: number; y: number; material: PlatformMaterial; mult: number } | null = null;
 
       angles.forEach((pAngle, idx) => {
         const jitterDist = dist * (0.88 + Math.random() * 0.24);
@@ -523,21 +756,35 @@ export class FirstScene extends Phaser.Scene {
         tracers.push({ mx, my, x: tx, y: ty, hit });
 
         if (hit) {
-          const result = this.surface.damage(tx, ty, weapon.radius, this.shots * 5.1 + idx, true);
+          const pelletDist = Math.hypot(tx - mx, ty - my);
+          const material = this.getImpactMaterial(tx, ty);
+          const effRadius = computeEffectiveDamageRadius('shotgun', weapon.radius, { distance: pelletDist, material });
+          const mult = weapon.materialMultipliers[material];
+          const result = this.surface.damage(tx, ty, effRadius, this.shots * 5.1 + idx, true, weapon.ditherWidth);
           if (result.removed.length) {
-            this.emitImpact(tx, ty, pAngle, weapon.radius, 4);
-            this.debrisManager?.applyBlastImpulse(tx, ty, weapon.radius * 1.2, 140);
-            this.checkTextSplits(tx, ty, weapon.radius, true);
+            this.emitImpact(tx, ty, pAngle, effRadius, 4);
+            this.debrisManager?.applyBlastImpulse(tx, ty, effRadius * 1.2, weapon.blastForce);
+            this.checkTextSplits(tx, ty, effRadius, true);
+            this.spawnShockwave(tx, ty, effRadius * 1.7, 0xffd494, 210, 1.5);
+            if (!bestHit || mult > bestHit.mult) {
+              bestHit = { x: tx, y: ty, material, mult };
+            }
           }
         }
       });
 
       this.surface.flushDirty();
+      this.ejectCasing(this.controller.x + Math.cos(baseAngle) * 18, shoulderY + Math.sin(baseAngle) * 18, baseAngle, 'shotgun');
 
       if (anyHit) {
         this.hits++;
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
         this.checkDetachables();
+        if (bestHit) {
+          const bh = bestHit as { x: number; y: number; material: PlatformMaterial; mult: number };
+          this.spawnShockwave(bh.x, bh.y, 34, COLORS.amber, 240, 2.2);
+          this.registerComboHit(bh.x, bh.y, bh.material, bh.mult);
+        }
       }
       this.lastShot = { time: now, flash: weapon.flash, weapon: 'shotgun', tracers };
       this.audio.shotgun(anyHit);
@@ -561,6 +808,7 @@ export class FirstScene extends Phaser.Scene {
         blastRadius: proj.blastRadius,
         angle: baseAngle,
         spin: 6,
+        erodeTimer: 0,
       });
       this.lastShot = {
         time: now,
@@ -583,7 +831,7 @@ export class FirstScene extends Phaser.Scene {
       const steps = Math.max(1, Math.ceil(dist / 5));
 
       let anyHit = false;
-      let lastHitPoint: { x: number; y: number } | null = null;
+      let lastHitPoint: { x: number; y: number; material: PlatformMaterial; effRadius: number } | null = null;
       for (let s = 0; s <= steps; s++) {
         const t = steps === 0 ? 1 : s / steps;
         const curX = fromX + (toX - fromX) * t;
@@ -591,17 +839,30 @@ export class FirstScene extends Phaser.Scene {
         const hit = this.surface.hit(curX, curY);
         if (hit) {
           anyHit = true;
-          const result = this.surface.damage(curX, curY, weapon.radius, this.shots * 1.77 + s, true);
+          const material = this.getImpactMaterial(curX, curY);
+          const effRadius = computeEffectiveDamageRadius('laser', weapon.radius, {
+            material,
+            chargeFactor: this.laserHeat,
+          });
+          const result = this.surface.damage(curX, curY, effRadius, this.shots * 1.77 + s, true, weapon.ditherWidth);
           if (result.removed.length) {
-            lastHitPoint = { x: curX, y: curY };
-            this.debrisManager?.applyBlastImpulse(curX, curY, weapon.radius * 1.1, 75);
-            this.checkTextSplits(curX, curY, weapon.radius, true);
+            lastHitPoint = { x: curX, y: curY, material, effRadius };
+            this.debrisManager?.applyBlastImpulse(curX, curY, effRadius * 1.1, weapon.blastForce);
+            this.checkTextSplits(curX, curY, effRadius, true);
           }
         }
       }
 
       if (lastHitPoint) {
-        this.emitImpact(lastHitPoint.x, lastHitPoint.y, baseAngle, weapon.radius, weapon.fragments);
+        this.emitImpact(lastHitPoint.x, lastHitPoint.y, baseAngle, lastHitPoint.effRadius, weapon.fragments);
+        this.spawnShockwave(
+          lastHitPoint.x,
+          lastHitPoint.y,
+          lastHitPoint.effRadius * (1.4 + this.laserHeat * 0.8),
+          this.laserHeat > 0.75 ? 0xff4dff : 0xff7700,
+          170,
+          1.5,
+        );
       }
       this.surface.flushDirty();
 
@@ -611,11 +872,23 @@ export class FirstScene extends Phaser.Scene {
         this.hits++;
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
         this.checkDetachables();
+        if (lastHitPoint) {
+          this.comboTimer = 2.4;
+          if (now - this.lastLaserComboTime >= 350) {
+            this.lastLaserComboTime = now;
+            this.registerComboHit(
+              lastHitPoint.x,
+              lastHitPoint.y,
+              lastHitPoint.material,
+              weapon.materialMultipliers[lastHitPoint.material],
+            );
+          }
+        }
       }
 
       const tracers: ShotTracer[] = [{ mx, my, x: toX, y: toY, hit: anyHit }];
       this.lastShot = { time: now, flash: weapon.flash, weapon: 'laser', tracers };
-      this.audio.laserPulse(anyHit);
+      this.audio.laserPulse(anyHit, this.laserHeat);
       this.notify();
       return;
     }
@@ -624,15 +897,20 @@ export class FirstScene extends Phaser.Scene {
     const hit = this.surface.hit(this.aim.x, this.aim.y);
     const tracers: ShotTracer[] = [{ mx, my, x: this.aim.x, y: this.aim.y, hit }];
     this.lastShot = { time: now, flash: weapon.flash, weapon: 'pistol', tracers };
+    this.ejectCasing(this.controller.x + Math.cos(baseAngle) * 16, shoulderY + Math.sin(baseAngle) * 16, baseAngle, 'pistol');
     if (hit) {
-      const result = this.surface.damage(this.aim.x, this.aim.y, weapon.radius, this.shots * 2.39);
+      const material = this.getImpactMaterial(this.aim.x, this.aim.y);
+      const effRadius = computeEffectiveDamageRadius('pistol', weapon.radius, { material });
+      const result = this.surface.damage(this.aim.x, this.aim.y, effRadius, this.shots * 2.39, false, weapon.ditherWidth);
       if (result.removed.length) {
         this.hits++;
-        this.emitImpact(this.aim.x, this.aim.y, baseAngle, weapon.radius, weapon.fragments);
-        this.debrisManager?.applyBlastImpulse(this.aim.x, this.aim.y, weapon.radius * 1.3, 160);
+        this.emitImpact(this.aim.x, this.aim.y, baseAngle, effRadius, weapon.fragments);
+        this.debrisManager?.applyBlastImpulse(this.aim.x, this.aim.y, effRadius * 1.3, weapon.blastForce);
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
         this.checkDetachables();
-        this.checkTextSplits(this.aim.x, this.aim.y, weapon.radius);
+        this.checkTextSplits(this.aim.x, this.aim.y, effRadius);
+        this.spawnShockwave(this.aim.x, this.aim.y, effRadius * 1.65, COLORS.amber, 210, 2);
+        this.registerComboHit(this.aim.x, this.aim.y, material, weapon.materialMultipliers[material]);
       }
     }
     this.audio.shot(hit);
@@ -662,7 +940,7 @@ export class FirstScene extends Phaser.Scene {
       if (this.fragments.length >= 80) this.removeFragment(0);
       const width = Phaser.Math.Between(4, 11), height = Phaser.Math.Between(3, 8);
       const sx = Phaser.Math.Clamp(Math.round(x - PAPER.x + Phaser.Math.Between(-15, 15)), 0, PAPER.width - width);
-      const sy = Phaser.Math.Clamp(Math.round(y - PAPER.y + Phaser.Math.Between(-15, 15)), 0, PAPER.height - height);
+      const sy = Phaser.Math.Clamp(Math.round(y - PAPER.y + Phaser.Math.Between(-15, 15)), 0, this.layout.paperHeight - height);
       const frame = `chip-${this.serial++}`;
       this.surface.source.add(frame, 0, sx, sy, width, height);
       const image = this.add.image(x + Phaser.Math.Between(-10, 10), y + Phaser.Math.Between(-10, 10), 'paper-source', frame).setDepth(40);
@@ -702,7 +980,10 @@ export class FirstScene extends Phaser.Scene {
   private clearEffects() {
     this.debrisManager?.reset();
     while (this.fragments.length) this.removeFragment(0);
+    while (this.popups.length) this.popups.pop()?.node.destroy();
     this.dust = [];
+    this.shockwaves = [];
+    this.casings = [];
     this.grenades = [];
     this.vortices = [];
     this.lastShot = undefined;
@@ -831,6 +1112,7 @@ export class FirstScene extends Phaser.Scene {
   }
 
   async loadCustomPage(data: ScrapedPageResult): Promise<void> {
+    const pageHeight = paperHeightFor(data.height);
     let sourceElement: HTMLCanvasElement | HTMLImageElement;
 
     if (data.screenshot && data.screenshot.startsWith('data:image/')) {
@@ -844,21 +1126,40 @@ export class FirstScene extends Phaser.Scene {
     } else {
       const canvas = document.createElement('canvas');
       canvas.width = PAPER.width;
-      canvas.height = PAPER.height;
+      canvas.height = pageHeight;
       const ctx = canvas.getContext('2d')!;
       ctx.fillStyle = '#f8f9fa';
-      ctx.fillRect(0, 0, PAPER.width, PAPER.height);
+      ctx.fillRect(0, 0, PAPER.width, pageHeight);
       ctx.fillStyle = '#202122';
       ctx.font = 'bold 26px Georgia';
       ctx.fillText(data.title || data.url, 48, 55);
       ctx.fillStyle = '#a2a9b1';
       ctx.fillRect(48, 72, PAPER.width - 96, 1);
+      const materialAccents: Record<PlatformMaterial, { accent: string; label: string }> = {
+        concrete: { accent: '#64748b', label: 'CONCRETO' },
+        metal: { accent: '#3b82f6', label: 'METAL' },
+        wood: { accent: '#b45309', label: 'MADERA' },
+        glass: { accent: '#06b6d4', label: 'VIDRIO' },
+        elastic: { accent: '#f59e0b', label: 'ELÁSTICO' },
+        paper: { accent: '#94a3b8', label: 'PAPEL' },
+      };
       for (const p of data.platforms) {
+        const mat: PlatformMaterial = p.material ?? 'paper';
+        const style = materialAccents[mat];
         ctx.fillStyle = '#eaecf0';
         ctx.fillRect(p.x, p.y, p.width, p.height);
+        ctx.fillStyle = style.accent;
+        ctx.fillRect(p.x, p.y, 4, p.height);
+        ctx.fillRect(p.x, p.y, p.width, 2);
         ctx.fillStyle = '#36414c';
         ctx.font = '11px sans-serif';
-        ctx.fillText(p.name, p.x + 8, p.y + Math.min(18, p.height - 4));
+        ctx.fillText(p.name, p.x + 10, p.y + Math.min(18, p.height - 4));
+        if (p.width >= 150 && p.height >= 14) {
+          ctx.fillStyle = style.accent;
+          ctx.font = 'bold 9px monospace';
+          const tagWidth = ctx.measureText(style.label).width;
+          ctx.fillText(style.label, p.x + p.width - tagWidth - 8, p.y + Math.min(16, p.height - 4));
+        }
       }
       sourceElement = canvas;
     }
@@ -869,9 +1170,14 @@ export class FirstScene extends Phaser.Scene {
     this.shots = 0;
     this.hits = 0;
     this.shotTime = -1000;
+    this.comboCount = 0;
+    this.comboTimer = 0;
+    this.laserHeat = 0;
+    this.lastLaserComboTime = -1000;
     this.resets++;
 
-    // 1. Surface: draw new image and reset regions
+    // 1. Surface: grow the page when the capture is taller than one fold, then draw it
+    this.applyPageExtent(pageHeight);
     this.surface.loadPage(sourceElement);
 
     // 2. Map platforms to world space
@@ -883,6 +1189,7 @@ export class FirstScene extends Phaser.Scene {
       width: p.width,
       height: p.height,
       oneWay: true,
+      material: p.material,
     }));
     this.currentPlatforms = worldPlatforms;
     this.controller.setPlatforms(worldPlatforms);
@@ -910,7 +1217,8 @@ export class FirstScene extends Phaser.Scene {
     }
 
     // 5. Place player safely on catwalk
-    this.controller.reset(350, WORLD.floor - 4);
+    this.controller.reset(350, this.layout.floor - 4);
+    this.syncCamera();
     this.notify();
   }
 
@@ -921,8 +1229,13 @@ export class FirstScene extends Phaser.Scene {
     this.shots = 0;
     this.hits = 0;
     this.shotTime = -1000;
+    this.comboCount = 0;
+    this.comboTimer = 0;
+    this.laserHeat = 0;
+    this.lastLaserComboTime = -1000;
     this.resets++;
 
+    this.applyPageExtent(PAPER.height);
     const demoCanvas = drawDemoPage();
     this.surface.loadPage(demoCanvas);
 
@@ -933,16 +1246,19 @@ export class FirstScene extends Phaser.Scene {
 
     this.initDemoDetachables();
     this.domTextManager.loadRuns(getDemoTextRuns());
-    this.controller.reset(350, WORLD.floor - 4);
+    this.controller.reset(350, this.layout.floor - 4);
+    this.syncCamera();
     this.notify();
   }
 
   resetLevel() {
     this.clearEffects(); this.audio.stop(); this.surface.reset(); this.keys.clear();
     this.shots = 0; this.hits = 0; this.shotTime = -1000;
+    this.comboCount = 0; this.comboTimer = 0; this.laserHeat = 0; this.lastLaserComboTime = -1000;
     this.detachables = [...this.initialDetachables];
     this.domTextManager?.reset();
-    this.controller.reset(350, WORLD.floor - 4);
+    this.controller.reset(350, this.layout.floor - 4);
+    this.syncCamera();
     this.phase = 0; this.paused = false; this.resets++; this.notify();
   }
 
@@ -962,11 +1278,15 @@ export class FirstScene extends Phaser.Scene {
       sourceFrames: this.surface?.source.getFrameNames(true).length,
       resets: this.resets,
       playerX: this.controller ? this.controller.x : 350,
-      playerY: this.controller ? this.controller.y : WORLD.floor - 4,
+      playerY: this.controller ? this.controller.y : this.layout.floor - 4,
       playerVy: this.controller ? this.controller.vy : 0,
       onGround: this.controller ? this.controller.onGround : true,
       isJetpacking: this.controller ? this.controller.isJetpacking : false,
       platform: this.controller ? this.controller.currentPlatformId : 'catwalk',
+      currentMaterial: this.controller ? this.controller.currentMaterial : 'metal',
+      craterDepth: this.controller ? this.controller.craterDepth : 0,
+      combo: this.comboCount,
+      laserHeat: Number(this.laserHeat.toFixed(2)),
       weapon: this.currentWeaponId,
       grenades: this.grenades.length,
       vortices: this.vortices.length,
@@ -990,11 +1310,38 @@ export class FirstScene extends Phaser.Scene {
     const drop = this.keys.has('KeyS') || this.keys.has('ArrowDown');
 
     this.controller.update({ moveX: movement, jump, drop, dt });
+    this.syncCamera();
+    this.refreshAim();
+
+    if (this.comboTimer > 0) {
+      this.comboTimer -= dt;
+      if (this.comboTimer <= 0) {
+        this.comboTimer = 0;
+        this.comboCount = 0;
+      }
+    }
+
+    const isFiringLaser = this.input.activePointer.isDown && this.input.activePointer.button === 0 && this.currentWeaponId === 'laser' && !this.paused;
+    if (isFiringLaser) {
+      this.laserHeat = Math.min(1, this.laserHeat + dt * 0.68);
+    } else {
+      this.laserHeat = Math.max(0, this.laserHeat - dt * 0.9);
+    }
+
+    if (
+      this.controller.currentMaterial !== this.lastNotifiedMaterial ||
+      this.controller.craterDepth !== this.lastNotifiedCraterDepth ||
+      this.comboCount !== this.lastNotifiedCombo ||
+      Math.round(this.laserHeat * 20) !== this.lastNotifiedHeatBucket
+    ) {
+      this.notify();
+    }
 
     if (this.controller.onGround) {
       this.phase += Math.abs(movement) * dt * 16;
     }
     this.actor.setPosition(this.controller.x, this.controller.y);
+    this.actor.setRotation(this.controller.onGround ? this.controller.surfaceSlope * 0.45 : 0);
 
     // Dynamic Jetpack Thruster Flames
     this.jetpackFlames.clear();
@@ -1059,7 +1406,7 @@ export class FirstScene extends Phaser.Scene {
     const angle = Math.atan2(this.aim.y - shoulderY, this.aim.x - this.controller.x);
 
     // Continuous automatic laser firing while holding mouse button down
-    if (this.input.activePointer.isDown && this.input.activePointer.button === 0 && this.currentWeaponId === 'laser' && !this.paused) {
+    if (isFiringLaser) {
       this.aim = this.pointerPosition(this.input.activePointer);
       this.shoot();
     } else {
@@ -1120,6 +1467,14 @@ export class FirstScene extends Phaser.Scene {
 
     this.effects.clear();
 
+    if (!this.controller.onGround && this.controller.lastBounceBoost > 0 && this.controller.vy < 0 && !this.prefs.reducedMotion) {
+      const bx = this.controller.x;
+      const by = this.controller.y + 3;
+      this.effects.lineStyle(2, COLORS.amber, 0.85).strokeEllipse(bx, by, 26, 8);
+      this.effects.lineStyle(1.5, COLORS.cyan, 0.95).strokeEllipse(bx, by - 2, 18, 5);
+      this.effects.fillStyle(COLORS.cyan, 0.45).fillEllipse(bx, by, 14, 4);
+    }
+
     if (this.isRepairing && !this.prefs.reducedMotion) {
       const mx = this.controller.x + Math.cos(angle) * 38;
       const my = shoulderY + Math.sin(angle) * 38;
@@ -1155,20 +1510,28 @@ export class FirstScene extends Phaser.Scene {
         this.effects.fillStyle(0xffd494, 0.7 * progress).fillRect(mx - 4, my - 4, 8, 8);
       } else if (s.weapon === 'laser') {
         const t = s.tracers[0];
-        // Outer thermal glow
-        this.effects.lineStyle(6, 0xff5500, 0.45 * progress).lineBetween(t.mx, t.my, t.x, t.y);
+        const heat = this.laserHeat;
+        const overheated = heat > 0.75;
+        const outerColor = overheated ? 0xff2a85 : heat > 0.35 ? 0xff5500 : 0x00f5d4;
+        const midColor = overheated ? 0xffb3ff : 0xffb454;
+        const outerWidth = 4 + heat * 8;
+        const midWidth = 2 + heat * 3.2;
+        const coreWidth = 1.2 + heat * 1.4;
+
+        // Outer thermal glow modulated by heat
+        this.effects.lineStyle(outerWidth, outerColor, (0.38 + heat * 0.25) * progress).lineBetween(t.mx, t.my, t.x, t.y);
         // Mid incandescent core
-        this.effects.lineStyle(3, 0xffb454, 0.8 * progress).lineBetween(t.mx, t.my, t.x, t.y);
+        this.effects.lineStyle(midWidth, midColor, 0.85 * progress).lineBetween(t.mx, t.my, t.x, t.y);
         // Inner intense white core
-        this.effects.lineStyle(1.2, 0xffffff, 0.95 * progress).lineBetween(t.mx, t.my, t.x, t.y);
+        this.effects.lineStyle(coreWidth, 0xffffff, 0.95 * progress).lineBetween(t.mx, t.my, t.x, t.y);
 
         // Muzzle optic discharge
-        this.effects.fillStyle(0xffffff, 0.9).fillRect(t.mx - 4, t.my - 4, 8, 8);
-        this.effects.fillStyle(0xff5500, 0.7).fillRect(t.mx - 7, t.my - 2, 14, 4);
+        this.effects.fillStyle(0xffffff, 0.92).fillRect(t.mx - 4, t.my - 4, 8, 8);
+        this.effects.fillStyle(outerColor, 0.75).fillRect(t.mx - 7, t.my - 2, 14, 4);
 
         if (t.hit) {
-          this.effects.fillStyle(0xffffff, 0.9).fillCircle(t.x, t.y, 4);
-          this.effects.lineStyle(2, 0xff7700, 0.8 * progress).strokeCircle(t.x, t.y, 8 + (1 - progress) * 6);
+          this.effects.fillStyle(0xffffff, 0.95).fillCircle(t.x, t.y, 4 + heat * 3);
+          this.effects.lineStyle(2, outerColor, 0.85 * progress).strokeCircle(t.x, t.y, 8 + heat * 6 + (1 - progress) * 6);
         }
       } else if (s.weapon === 'vortex') {
         const mx = s.tracers[0].mx, my = s.tracers[0].my;
@@ -1182,14 +1545,38 @@ export class FirstScene extends Phaser.Scene {
     for (let i = this.grenades.length - 1; i >= 0; i--) {
       const g = this.grenades[i];
       g.vy += 860 * dt;
+
+      // Gravitational pull from nearby active singularities (< 240px)
+      for (const v of this.vortices) {
+        const dx = v.x - g.x;
+        const dy = v.y - g.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 8 && dist < 240) {
+          const pull = (1 - dist / 240) * 540 * dt;
+          g.vx += (dx / dist) * pull;
+          g.vy += (dy / dist) * pull;
+        }
+      }
+
       g.x += g.vx * dt;
       g.y += g.vy * dt;
       g.angle += g.spin * dt;
       g.fuse -= dt * 1000;
 
+      // Horizontal world-edge bounce
+      if (g.x < 52) {
+        g.x = 52;
+        g.vx = Math.abs(g.vx) * 0.72;
+        if (Math.abs(g.vx) > 25) this.audio.grenadeBounce();
+      } else if (g.x > WORLD.width - 52) {
+        g.x = WORLD.width - 52;
+        g.vx = -Math.abs(g.vx) * 0.72;
+        if (Math.abs(g.vx) > 25) this.audio.grenadeBounce();
+      }
+
       // Catwalk collision
-      if (g.y >= WORLD.floor - 4) {
-        g.y = WORLD.floor - 4;
+      if (g.y >= this.layout.floor - 4) {
+        g.y = this.layout.floor - 4;
         g.vy = -g.vy * 0.52;
         g.vx *= 0.88;
         if (Math.abs(g.vy) > 35) this.audio.grenadeBounce();
@@ -1210,23 +1597,50 @@ export class FirstScene extends Phaser.Scene {
 
       // Detonation
       if (g.fuse <= 0) {
-        const result = this.surface.damage(g.x, g.y, g.blastRadius, Math.random() * 9999);
-        if (result.removed.length) {
-          this.hits++;
-          this.emitImpact(g.x, g.y, -Math.PI / 2, g.blastRadius, 24);
+        const grenadeWeapon = WEAPONS.grenade;
+        const material = this.getImpactMaterial(g.x, g.y);
+        const effRadius = computeEffectiveDamageRadius('grenade', g.blastRadius, { material });
+        const result = this.surface.damage(g.x, g.y, effRadius, Math.random() * 9999, true, grenadeWeapon.ditherWidth);
+        let anyRemoved = result.removed.length > 0;
+        if (anyRemoved) {
+          this.emitImpact(g.x, g.y, -Math.PI / 2, effRadius, grenadeWeapon.fragments);
         }
+        this.checkTextSplits(g.x, g.y, effRadius, true);
+
+        // Secondary cluster shrapnel impacts
+        const clusterCount = grenadeWeapon.clusterCount ?? 5;
+        const clusterRadius = grenadeWeapon.clusterRadius ?? 15;
+        const clusters = generateClusterImpacts(g.x, g.y, clusterCount, effRadius * 0.85, Math.round(g.x + g.y));
+        for (let c = 0; c < clusters.length; c++) {
+          const pt = clusters[c];
+          const cResult = this.surface.damage(pt.x, pt.y, clusterRadius, g.x + g.y + c * 13.7, true, grenadeWeapon.ditherWidth);
+          if (cResult.removed.length) {
+            anyRemoved = true;
+            this.emitImpact(pt.x, pt.y, pt.angle, clusterRadius, 4);
+          }
+          this.checkTextSplits(pt.x, pt.y, clusterRadius, true);
+          this.spawnShockwave(pt.x, pt.y, clusterRadius * 1.7, 0xffd166, 250, 1.8);
+        }
+        this.surface.flushDirty();
+
+        if (anyRemoved) {
+          this.hits++;
+          this.registerComboHit(g.x, g.y, material, grenadeWeapon.materialMultipliers[material]);
+        }
+
         // Blast impulse to scatter stacked debris with radial impulse & angular torque
-        this.debrisManager?.applyBlastImpulse(g.x, g.y, g.blastRadius, 520);
+        this.debrisManager?.applyBlastImpulse(g.x, g.y, effRadius, grenadeWeapon.blastForce);
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
         this.checkDetachables();
-        this.checkTextSplits(g.x, g.y, g.blastRadius);
         this.audio.explosion();
+        this.audio.clusterPop();
         if (!this.prefs.reducedMotion) {
-          this.cameras.main.shake(120, 0.007);
+          this.cameras.main.shake(grenadeWeapon.shakeDuration, grenadeWeapon.shakeIntensity);
         }
+        this.spawnShockwave(g.x, g.y, effRadius * 1.5, COLORS.amber, 320, 3);
         // Explosive flash circle
-        this.effects.fillStyle(0xffffff, 0.85).fillCircle(g.x, g.y, g.blastRadius * 0.5);
-        this.effects.lineStyle(3, COLORS.amber, 0.9).strokeCircle(g.x, g.y, g.blastRadius);
+        this.effects.fillStyle(0xffffff, 0.85).fillCircle(g.x, g.y, effRadius * 0.5);
+        this.effects.lineStyle(3, COLORS.amber, 0.9).strokeCircle(g.x, g.y, effRadius);
         this.grenades.splice(i, 1);
         this.notify();
         continue;
@@ -1283,16 +1697,38 @@ export class FirstScene extends Phaser.Scene {
       v.vy *= 0.96;
       v.angle += v.spin * dt;
       v.fuse -= dt * 1000;
+      v.erodeTimer += dt * 1000;
+
+      // World horizontal containment
+      if (v.x < 52) {
+        v.x = 52;
+        v.vx = Math.abs(v.vx) * 0.5;
+      } else if (v.x > WORLD.width - 52) {
+        v.x = WORLD.width - 52;
+        v.vx = -Math.abs(v.vx) * 0.5;
+      }
 
       // Catwalk containment
-      if (v.y >= WORLD.floor - 8) {
-        v.y = WORLD.floor - 8;
+      if (v.y >= this.layout.floor - 8) {
+        v.y = this.layout.floor - 8;
         v.vy = -Math.abs(v.vy) * 0.2;
         v.vx *= 0.85;
       }
 
       // Gravitational attraction vortex pulling nearby debris & letters
       this.debrisManager?.applyVortexPull(v.x, v.y, 220, 360, dt);
+
+      // Continuous core erosion every ~90ms while active
+      const vortexWeapon = WEAPONS.vortex;
+      if (v.fuse > 0 && v.erodeTimer >= 90) {
+        v.erodeTimer -= 90;
+        const erodeResult = this.surface.damage(v.x, v.y, 10, this.time.now * 0.1 + i, false, vortexWeapon.ditherWidth);
+        if (erodeResult.removed.length > 0) {
+          this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
+          this.checkDetachables();
+          this.checkTextSplits(v.x, v.y, 10);
+        }
+      }
 
       // Periodically trigger a pulse hum
       if (Math.random() < 0.08) {
@@ -1301,26 +1737,32 @@ export class FirstScene extends Phaser.Scene {
 
       // Gravitational Collapse / Detonation
       if (v.fuse <= 0) {
-        const result = this.surface.damage(v.x, v.y, v.blastRadius, Math.random() * 9999);
+        const material = this.getImpactMaterial(v.x, v.y);
+        const effRadius = computeEffectiveDamageRadius('vortex', v.blastRadius, { material });
+        const result = this.surface.damage(v.x, v.y, effRadius, Math.random() * 9999, false, vortexWeapon.ditherWidth);
         if (result.removed.length) {
           this.hits++;
-          this.emitImpact(v.x, v.y, -Math.PI / 2, v.blastRadius, 32);
+          this.emitImpact(v.x, v.y, -Math.PI / 2, effRadius, vortexWeapon.fragments);
         }
+        this.registerComboHit(v.x, v.y, material, vortexWeapon.materialMultipliers[material], '¡SINGULARIDAD!');
         // Blast impulse to scatter debris outward upon collapse
-        this.debrisManager?.applyBlastImpulse(v.x, v.y, v.blastRadius * 1.4, 620);
+        this.debrisManager?.applyBlastImpulse(v.x, v.y, effRadius * 1.4, vortexWeapon.blastForce);
         this.debrisManager?.syncPlatforms((px, py) => this.surface.hit(px, py));
         this.checkDetachables();
-        this.checkTextSplits(v.x, v.y, v.blastRadius);
+        this.checkTextSplits(v.x, v.y, effRadius);
         this.audio.vortexImplosion();
 
         if (!this.prefs.reducedMotion) {
-          this.cameras.main.shake(180, 0.012);
+          this.cameras.main.shake(vortexWeapon.shakeDuration, vortexWeapon.shakeIntensity);
         }
 
-        // Violent collapse shockwave effect
-        this.effects.fillStyle(0x0b1018, 0.95).fillCircle(v.x, v.y, v.blastRadius * 0.7);
-        this.effects.lineStyle(4, COLORS.cyan, 0.95).strokeCircle(v.x, v.y, v.blastRadius);
-        this.effects.lineStyle(2, 0x9b5de5, 0.9).strokeCircle(v.x, v.y, v.blastRadius * 1.3);
+        // Concentric shockwave rings & collapse flash
+        this.spawnShockwave(v.x, v.y, effRadius * 1.15, COLORS.cyan, 300, 3.5);
+        this.spawnShockwave(v.x, v.y, effRadius * 1.55, 0x9b5de5, 410, 2.5);
+        this.spawnShockwave(v.x, v.y, effRadius * 1.95, 0xffffff, 500, 1.5);
+        this.effects.fillStyle(0x0b1018, 0.95).fillCircle(v.x, v.y, effRadius * 0.7);
+        this.effects.lineStyle(4, COLORS.cyan, 0.95).strokeCircle(v.x, v.y, effRadius);
+        this.effects.lineStyle(2, 0x9b5de5, 0.9).strokeCircle(v.x, v.y, effRadius * 1.3);
 
         this.vortices.splice(i, 1);
         this.notify();
@@ -1380,7 +1822,7 @@ export class FirstScene extends Phaser.Scene {
       if (p.life <= 0) { this.removeFragment(i); continue; }
       p.vy += 490 * dt; p.image.x += p.vx * dt; p.image.y += p.vy * dt; p.image.rotation += p.spin * dt;
       p.image.alpha = Math.min(1, p.life / 160);
-      if (p.image.y > WORLD.floor - 3) { p.image.y = WORLD.floor - 3; p.vy = -Math.abs(p.vy) * 0.24; p.vx *= 0.75; }
+      if (p.image.y > this.layout.floor - 3) { p.image.y = this.layout.floor - 3; p.vy = -Math.abs(p.vy) * 0.24; p.vx *= 0.75; }
     }
 
     // Update dust
@@ -1390,47 +1832,139 @@ export class FirstScene extends Phaser.Scene {
       this.effects.fillStyle(p.color, (p.life / p.duration) * 0.6).fillRect(Math.round(p.x), Math.round(p.y), p.size, p.size); return true;
     });
 
-    // Draw reticle according to active weapon
+    // Update & draw lightweight shockwave rings
+    for (let i = this.shockwaves.length - 1; i >= 0; i--) {
+      const sw = this.shockwaves[i];
+      sw.life -= dt * 1000;
+      if (sw.life <= 0) {
+        this.shockwaves.splice(i, 1);
+        continue;
+      }
+      const progress = 1 - sw.life / sw.duration;
+      const radius = Math.max(2, sw.maxRadius * (0.2 + 0.8 * progress));
+      const alpha = Math.max(0, (1 - progress) * 0.85);
+      this.effects.lineStyle(Math.max(1, sw.lineWidth * (1 - progress * 0.5)), sw.color, alpha);
+      this.effects.strokeCircle(sw.x, sw.y, radius);
+    }
+
+    // Update & draw shell casings on graphics layer
+    for (let i = this.casings.length - 1; i >= 0; i--) {
+      const c = this.casings[i];
+      c.life -= dt * 1000;
+      if (c.life <= 0) {
+        this.casings.splice(i, 1);
+        continue;
+      }
+      c.vy += 640 * dt;
+      c.x += c.vx * dt;
+      c.y += c.vy * dt;
+      c.angle += c.spin * dt;
+      if (c.y >= this.layout.floor - 3) {
+        c.y = this.layout.floor - 3;
+        c.vy = -Math.abs(c.vy) * 0.42;
+        c.vx *= 0.72;
+        c.spin *= 0.65;
+      }
+      const alpha = Math.min(1, c.life / 240);
+      const cos = Math.cos(c.angle);
+      const sin = Math.sin(c.angle);
+      const hw = c.w * 0.5;
+      const hh = c.h * 0.5;
+      this.effects.fillStyle(c.color, alpha);
+      this.effects.beginPath();
+      this.effects.moveTo(c.x + (-hw * cos - -hh * sin), c.y + (-hw * sin + -hh * cos));
+      this.effects.lineTo(c.x + (hw * cos - -hh * sin), c.y + (hw * sin + -hh * cos));
+      this.effects.lineTo(c.x + (hw * cos - hh * sin), c.y + (hw * sin + hh * cos));
+      this.effects.lineTo(c.x + (-hw * cos - hh * sin), c.y + (-hw * sin + hh * cos));
+      this.effects.closePath();
+      this.effects.fillPath();
+    }
+
+    // Update floating combo / impact popups
+    for (let i = this.popups.length - 1; i >= 0; i--) {
+      const p = this.popups[i];
+      p.life -= dt * 1000;
+      if (p.life <= 0) {
+        p.node.destroy();
+        this.popups.splice(i, 1);
+        continue;
+      }
+      p.node.y += p.vy * dt;
+      const fadeWindow = p.duration * 0.45;
+      if (p.life < fadeWindow) {
+        p.node.setAlpha((this.prefs.reducedMotion ? 0.82 : 1) * Math.max(0, p.life / fadeWindow));
+      }
+    }
+
+    // Draw reticle according to active weapon, dynamically expanding with recoil & laser heat
     this.reticle.clear();
     if (this.inside) {
       const { x, y } = this.aim;
       const solid = this.surface.hit(x, y);
       const reticleColor = solid ? 0x345e59 : COLORS.cyan;
+      const expand = this.prefs.reducedMotion
+        ? 0
+        : Math.min(10, recoil * 0.85 + Math.min(5, Math.abs(this.controller.recoilVx) * 0.02));
+      const heatPulse = this.currentWeaponId === 'laser'
+        ? this.laserHeat * (2.5 + (this.prefs.reducedMotion ? 0 : Math.sin(this.time.now * 0.025) * 1.5))
+        : 0;
+      const spread = Math.round(expand + heatPulse);
 
       if (this.currentWeaponId === 'pistol') {
-        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, 8);
-        this.reticle.lineStyle(1, reticleColor, 1).strokeCircle(x, y, 7);
-        for (const [ax, ay, bx, by] of [[-12, 0, -5, 0], [5, 0, 12, 0], [0, -12, 0, -5], [0, 5, 0, 12]]) {
+        const r = 7 + spread;
+        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, r + 1);
+        this.reticle.lineStyle(1, reticleColor, 1).strokeCircle(x, y, r);
+        for (const [ax, ay, bx, by] of [
+          [-12 - spread, 0, -5 - spread, 0], [5 + spread, 0, 12 + spread, 0],
+          [0, -12 - spread, 0, -5 - spread], [0, 5 + spread, 0, 12 + spread],
+        ]) {
           this.reticle.lineBetween(x + ax, y + ay, x + bx, y + by);
         }
         if (solid) this.reticle.fillStyle(0x345e59).fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
       } else if (this.currentWeaponId === 'shotgun') {
-        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, 16);
-        this.reticle.lineStyle(1, reticleColor, 0.9).strokeCircle(x, y, 15);
-        for (const [ax, ay, bx, by] of [[-20, 0, -13, 0], [13, 0, 20, 0], [0, -20, 0, -13], [0, 13, 0, 20]]) {
+        const r = 15 + spread;
+        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, r + 1);
+        this.reticle.lineStyle(1, reticleColor, 0.9).strokeCircle(x, y, r);
+        for (const [ax, ay, bx, by] of [
+          [-20 - spread, 0, -13 - spread, 0], [13 + spread, 0, 20 + spread, 0],
+          [0, -20 - spread, 0, -13 - spread], [0, 13 + spread, 0, 20 + spread],
+        ]) {
           this.reticle.lineBetween(x + ax, y + ay, x + bx, y + by);
         }
         this.reticle.fillStyle(reticleColor).fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
       } else if (this.currentWeaponId === 'grenade') {
-        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, 12);
-        this.reticle.lineStyle(1, COLORS.amber, 1).strokeCircle(x, y, 11);
+        const r = 11 + spread;
+        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, r + 1);
+        this.reticle.lineStyle(1, COLORS.amber, 1).strokeCircle(x, y, r);
         this.reticle.lineStyle(1, reticleColor, 0.8).strokeCircle(x, y, 4);
-        for (const [ax, ay, bx, by] of [[-16, 0, -8, 0], [8, 0, 16, 0], [0, -16, 0, -8], [0, 8, 0, 16]]) {
+        for (const [ax, ay, bx, by] of [
+          [-16 - spread, 0, -8 - spread, 0], [8 + spread, 0, 16 + spread, 0],
+          [0, -16 - spread, 0, -8 - spread], [0, 8 + spread, 0, 16 + spread],
+        ]) {
           this.reticle.lineBetween(x + ax, y + ay, x + bx, y + by);
         }
       } else if (this.currentWeaponId === 'laser') {
-        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, 6);
-        this.reticle.lineStyle(1, 0xff7700, 1).strokeCircle(x, y, 5);
-        this.reticle.lineStyle(1, COLORS.cyan, 0.9);
-        for (const [ax, ay, bx, by] of [[-10, 0, -3, 0], [3, 0, 10, 0], [0, -10, 0, -3], [0, 3, 0, 10]]) {
+        const r = 5 + spread;
+        const laserRingColor = this.laserHeat > 0.75 ? 0xff2a85 : 0xff7700;
+        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, r + 1);
+        this.reticle.lineStyle(1 + this.laserHeat, laserRingColor, 1).strokeCircle(x, y, r);
+        this.reticle.lineStyle(1, this.laserHeat > 0.75 ? 0xffffff : COLORS.cyan, 0.9);
+        for (const [ax, ay, bx, by] of [
+          [-10 - spread, 0, -3 - spread, 0], [3 + spread, 0, 10 + spread, 0],
+          [0, -10 - spread, 0, -3 - spread], [0, 3 + spread, 0, 10 + spread],
+        ]) {
           this.reticle.lineBetween(x + ax, y + ay, x + bx, y + by);
         }
         this.reticle.fillStyle(0xffffff).fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
       } else if (this.currentWeaponId === 'vortex') {
-        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, 18);
-        this.reticle.lineStyle(1.5, 0x9b5de5, 1).strokeCircle(x, y, 17);
+        const r = 17 + spread;
+        this.reticle.lineStyle(2, 0x10232c, 0.8).strokeCircle(x, y, r + 1);
+        this.reticle.lineStyle(1.5, 0x9b5de5, 1).strokeCircle(x, y, r);
         this.reticle.lineStyle(1, COLORS.cyan, 0.8).strokeCircle(x, y, 7);
-        for (const [ax, ay, bx, by] of [[-24, 0, -17, 0], [17, 0, 24, 0], [0, -24, 0, -17], [0, 17, 0, 24]]) {
+        for (const [ax, ay, bx, by] of [
+          [-24 - spread, 0, -17 - spread, 0], [17 + spread, 0, 24 + spread, 0],
+          [0, -24 - spread, 0, -17 - spread], [0, 17 + spread, 0, 24 + spread],
+        ]) {
           this.reticle.lineBetween(x + ax, y + ay, x + bx, y + by);
         }
         this.reticle.fillStyle(0x9b5de5).fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);

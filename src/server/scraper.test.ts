@@ -3,6 +3,8 @@ import {
   prunePlatforms,
   extractDetachables,
   getPresetPage,
+  classifyPlatformMaterial,
+  expandTallContainers,
   isPrivateOrReservedIp,
   validateUrlTarget,
   assertPublicHostname,
@@ -73,6 +75,28 @@ describe('Scraper platform pruning & detachables extraction', () => {
     expect(detachables.length).toBeLessThanOrEqual(8);
   });
 
+  it('keeps blocks below the first fold when the captured page is tall', () => {
+    const low: CandidateElement = { tag: 'h2', x: 48, y: 1400, width: 480, height: 36, text: 'Mas abajo' };
+    expect(prunePlatforms([low])).toHaveLength(0);
+    const tall = prunePlatforms([low], 1952);
+    expect(tall).toHaveLength(1);
+    expect(tall[0].y).toBe(1400);
+    expect(tall[0].height).toBe(36);
+
+    const card: CandidateElement = { tag: 'figure', x: 80, y: 1500, width: 300, height: 180 };
+    expect(extractDetachables([card])).toHaveLength(0);
+    expect(extractDetachables([card], 1952)).toHaveLength(1);
+  });
+
+  it('grows the platform budget across four folds and keeps one fold capped at 14', () => {
+    const candidates: CandidateElement[] = [];
+    for (let i = 0; i < 40; i++) {
+      candidates.push({ tag: 'div', x: 40, y: 20 + i * 48, width: 280, height: 24 });
+    }
+    expect(prunePlatforms(candidates).length).toBeLessThanOrEqual(14);
+    expect(prunePlatforms(candidates, 1952)).toHaveLength(40);
+  });
+
   it('provides structured presets for offline testing', () => {
     const wiki = getPresetPage('wikipedia');
     expect(wiki.platforms.length).toBeGreaterThan(0);
@@ -132,5 +156,79 @@ describe('Scraper platform pruning & detachables extraction', () => {
 
     await expect(scrapeUrl('http://127.0.0.1:5173')).rejects.toThrow(/privadas o locales/i);
     await expect(scrapeUrl('http://localhost:3000')).rejects.toThrow(/privadas o locales/i);
+  });
+
+  it('classifies DOM elements into their respective physics materials in classifyPlatformMaterial', () => {
+    expect(classifyPlatformMaterial({ tag: 'button', x: 0, y: 0, width: 100, height: 30 })).toBe('elastic');
+    expect(classifyPlatformMaterial({ tag: 'img', x: 0, y: 0, width: 100, height: 100 })).toBe('glass');
+    expect(classifyPlatformMaterial({ tag: 'nav', x: 0, y: 0, width: 400, height: 40 })).toBe('metal');
+    expect(classifyPlatformMaterial({ tag: 'h1', x: 0, y: 0, width: 300, height: 40 })).toBe('concrete');
+    expect(classifyPlatformMaterial({ tag: 'blockquote', x: 0, y: 0, width: 300, height: 80 })).toBe('wood');
+    expect(classifyPlatformMaterial({ tag: 'aside', x: 0, y: 0, width: 200, height: 100 })).toBe('wood');
+    expect(classifyPlatformMaterial({ tag: 'p', x: 0, y: 0, width: 300, height: 40 })).toBe('paper');
+    expect(classifyPlatformMaterial({ tag: 'div', x: 0, y: 0, width: 300, height: 40 })).toBe('paper');
+  });
+
+  it('expands tall containers into walkable roof and base ledges within <= 220px', () => {
+    const tallCandidate: CandidateElement = {
+      tag: 'article',
+      x: 50,
+      y: 100,
+      width: 400,
+      height: 280, // > 220 and >= 260 -> produces top roof and bottom base
+      text: 'Articulo Extenso',
+    };
+
+    // Directly, prunePlatforms would reject it because height > 220
+    expect(prunePlatforms([tallCandidate])).toHaveLength(0);
+
+    // With expandTallContainers:
+    const expanded = expandTallContainers([tallCandidate]);
+    expect(expanded).toHaveLength(2);
+    expect(expanded[0].height).toBeLessThanOrEqual(220);
+    expect(expanded[0].height).toBe(22);
+    expect(expanded[0].text).toContain('[Techo]');
+    expect(expanded[1].height).toBeLessThanOrEqual(220);
+    expect(expanded[1].height).toBe(20);
+    expect(expanded[1].y).toBe(100 + 280 - 20); // 360
+
+    // prunePlatforms now accepts both ledges
+    const platforms = prunePlatforms(expanded);
+    expect(platforms).toHaveLength(2);
+    expect(platforms[0].y).toBe(100);
+    expect(platforms[1].y).toBe(360);
+  });
+
+  it('preserves full-width navigation bars up to 1040px in prunePlatforms', () => {
+    const fullNav: CandidateElement = {
+      tag: 'nav',
+      x: 48,
+      y: 30,
+      width: 1040,
+      height: 38,
+      text: 'Navegacion Global',
+    };
+
+    const platforms = prunePlatforms([fullNav]);
+    expect(platforms).toHaveLength(1);
+    expect(platforms[0].width).toBe(1040);
+    expect(platforms[0].tag).toBe('nav');
+    expect(platforms[0].material).toBe('metal');
+  });
+
+  it('provides hackernews and mdn presets with renderMode preset and materialSummary', () => {
+    const hn = getPresetPage('hackernews');
+    expect(hn.renderMode).toBe('preset');
+    expect(hn.platforms.length).toBeGreaterThan(0);
+    expect(hn.materialSummary).toBeDefined();
+    expect(hn.materialSummary?.metal).toBeGreaterThan(0);
+    expect(hn.title).toContain('Hacker News');
+
+    const mdn = getPresetPage('mdn');
+    expect(mdn.renderMode).toBe('preset');
+    expect(mdn.platforms.length).toBeGreaterThan(0);
+    expect(mdn.materialSummary).toBeDefined();
+    expect(mdn.materialSummary?.concrete).toBeGreaterThan(0);
+    expect(mdn.title).toContain('MDN');
   });
 });

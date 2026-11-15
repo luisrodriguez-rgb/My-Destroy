@@ -193,29 +193,92 @@ export class ShotAudio {
     } catch { /* Audio support is optional */ }
   }
 
-  laserPulse(hit: boolean) {
+  laserPulse(hit: boolean, heatFactor = 0) {
     const ctx = this.getContext();
     if (!ctx) return;
     try {
       const now = ctx.currentTime;
+      const heat = Math.max(0, Math.min(1, heatFactor));
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(hit ? 680 : 880, now);
-      osc.frequency.exponentialRampToValueAtTime(hit ? 320 : 440, now + 0.05);
+      const startFreq = (hit ? 680 : 880) + heat * 440;
+      const endFreq = (hit ? 320 : 440) + heat * 260;
+      osc.frequency.setValueAtTime(startFreq, now);
+      osc.frequency.exponentialRampToValueAtTime(endFreq, now + 0.05);
 
       const filter = ctx.createBiquadFilter();
       filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(1400, now);
-      filter.Q.value = 3.5;
+      filter.frequency.setValueAtTime(1400 + heat * 1650, now);
+      filter.Q.value = 3.5 + heat * 2.5;
 
       const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.setValueAtTime(0.11 + heat * 0.05, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.048);
 
       osc.connect(filter).connect(gain).connect(ctx.destination);
       this.track(osc, () => { filter.disconnect(); gain.disconnect(); });
       osc.start(now);
       osc.stop(now + 0.05);
+    } catch { /* Audio support is optional */ }
+  }
+
+  clusterPop() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const noiseBuf = this.getNoiseBuffer(ctx, 0.09);
+      const source = ctx.createBufferSource();
+      source.buffer = noiseBuf;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1750, now);
+      filter.frequency.exponentialRampToValueAtTime(520, now + 0.07);
+      filter.Q.value = 2.0;
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.18, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
+
+      source.connect(filter).connect(gain).connect(ctx.destination);
+      this.track(source, () => { filter.disconnect(); gain.disconnect(); });
+      source.start(now);
+      source.stop(now + 0.08);
+
+      const snap = ctx.createOscillator();
+      snap.type = 'triangle';
+      snap.frequency.setValueAtTime(420, now);
+      snap.frequency.exponentialRampToValueAtTime(110, now + 0.055);
+      const snapGain = ctx.createGain();
+      snapGain.gain.setValueAtTime(0.16, now);
+      snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+      snap.connect(snapGain).connect(ctx.destination);
+      this.track(snap, () => snapGain.disconnect());
+      snap.start(now);
+      snap.stop(now + 0.065);
+    } catch { /* Audio support is optional */ }
+  }
+
+  comboChime(comboLevel: number) {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const step = Math.max(0, Math.min(12, comboLevel - 2));
+      const baseFreq = 480 * Math.pow(1.06, step);
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(baseFreq, now);
+      osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.2, now + 0.075);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.055, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
+
+      osc.connect(gain).connect(ctx.destination);
+      this.track(osc, () => gain.disconnect());
+      osc.start(now);
+      osc.stop(now + 0.09);
     } catch { /* Audio support is optional */ }
   }
 

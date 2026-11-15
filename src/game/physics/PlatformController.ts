@@ -1,4 +1,4 @@
-import { PLAYER_PHYSICS } from '../tuning';
+import { PLATFORM_MATERIALS, PLAYER_PHYSICS, type PlatformMaterial } from '../tuning';
 import type { Platform } from '../platforms/demoPlatforms';
 
 export interface ControllerOptions {
@@ -23,6 +23,16 @@ export class PlatformController {
   onGround = true;
   isJetpacking = false;
   currentPlatformId: string | null = 'catwalk';
+  /** Material under the operator's feet (last surface landed on). */
+  currentMaterial: PlatformMaterial = 'metal';
+  /** How many px the operator sits below the platform's top crust (crater floor). */
+  craterDepth = 0;
+  /** Tilt in radians of the supporting surface; positive = right side lower. */
+  surfaceSlope = 0;
+  /** 1 when the last jump was boosted by an elastic surface, else 0. */
+  lastBounceBoost = 0;
+  /** Horizontal weapon-recoil velocity layered on top of vx; decays by surface traction. */
+  recoilVx = 0;
 
   private coyoteTimer = 0;
   private jumpBufferTimer = 0;
@@ -40,8 +50,33 @@ export class PlatformController {
     this.onGround = true;
     this.isJetpacking = false;
     this.currentPlatformId = 'catwalk';
+    this.currentMaterial = 'metal';
+    this.craterDepth = 0;
+    this.surfaceSlope = 0;
+    this.lastBounceBoost = 0;
+    this.recoilVx = 0;
     this.coyoteTimer = 0;
     this.jumpBufferTimer = 0;
+  }
+
+  /**
+   * Applies a weapon-recoil impulse (px/s). Horizontal recoil accumulates into recoilVx (clamped to
+   * ±420) and decays in update(). A heavy downward shot (impulseVy < -35) lifts the operator off the
+   * ground into a ballistic hop; while airborne a light upward impulse only softens the trajectory.
+   */
+  applyRecoil(impulseVx: number, impulseVy: number) {
+    if (!Number.isFinite(impulseVx) || !Number.isFinite(impulseVy)) return;
+    this.recoilVx = Math.max(-420, Math.min(420, this.recoilVx + impulseVx));
+
+    if (impulseVy < -35) {
+      const wasAir = !this.onGround;
+      this.leaveGround();
+      this.coyoteTimer = 0;
+      // From the ground the hop starts from rest; in the air the impulse cushions a fall (capped at 200).
+      this.vy = Math.max(-560, Math.min(200, (wasAir ? this.vy : 0) + impulseVy));
+    } else if (!this.onGround && impulseVy < 0) {
+      this.vy = Math.max(-560, this.vy + impulseVy * 0.5);
+    }
   }
 
   requestJump() {
@@ -52,19 +87,76 @@ export class PlatformController {
     this.options.platforms = platforms;
   }
 
-  /** Checks if any sample point across the player's feet width is solid. */
-  private checkFootingSolid(platformY: number): boolean {
+  setFloor(floorY: number) {
+    this.options.floorY = floorY;
+  }
+
+  /**
+   * Samples the platform under the operator's feet across its strata.
+   * The top crust (platform.y + 2) gives depth 0; on thick slabs (height >= 10) a destroyed crust
+   * can still be backed by inner layers at dy = 6 / 10, letting the operator sink into craters.
+   * The shallowest supported foot wins, so a boot on the crater rim keeps the operator up.
+   */
+  private sampleFootingStrata(platform: Platform): { solid: boolean; depthOffset: number; slope: number } {
     const footOffsets = [-6, 0, 6];
-    return footOffsets.some(offset => this.options.isSolid(this.x + offset, platformY + 2));
+    const crustY = platform.y + 2;
+    const maxDy = Math.min(platform.height, 12);
+    const depths: Array<number | null> = footOffsets.map(offset => {
+      const x = this.x + offset;
+      if (this.options.isSolid(x, crustY)) return 0;
+      if (platform.height < 10) return null;
+      for (const dy of [6, 10]) {
+        if (dy > maxDy) break;
+        if (this.options.isSolid(x, platform.y + dy)) return dy - 2;
+      }
+      return null;
+    });
+
+    const validDepths = depths.filter((d): d is number => d !== null);
+    if (validDepths.length === 0) return { solid: false, depthOffset: 0, slope: 0 };
+
+    const depthOffset = Math.min(...validDepths);
+    const [leftDepth, , rightDepth] = depths;
+    let slope = 0;
+    if (leftDepth !== null && rightDepth !== null) {
+      slope = Math.max(-0.35, Math.min(0.35, Math.atan2(rightDepth - leftDepth, 12)));
+    } else if (leftDepth !== null) {
+      slope = 0.18; // only the left boot is supported: the surface dips to the right
+    } else if (rightDepth !== null) {
+      slope = -0.18;
+    }
+    return { solid: true, depthOffset, slope };
+  }
+
+  private leaveGround() {
+    this.onGround = false;
+    this.currentPlatformId = null;
+    this.craterDepth = 0;
+    this.surfaceSlope = 0;
   }
 
   update(input: ControllerInput) {
     const { moveX, jump, drop, dt } = input;
     const { speed, jumpForce, gravity, maxFallSpeed, coyoteTime, jumpBufferTime } = PLAYER_PHYSICS;
 
-    // 1. Horizontal movement
-    this.vx = moveX * speed;
-    this.x = Math.max(this.options.worldBounds.minX, Math.min(this.options.worldBounds.maxX, this.x + this.vx * dt));
+    // 1. Horizontal movement (low-traction surfaces keep inertia and slide)
+    const groundProfile = PLATFORM_MATERIALS[this.currentMaterial];
+    if (this.onGround && groundProfile.traction < 0.6) {
+      const target = moveX * speed;
+      const accel = speed * groundProfile.traction * 10 * dt;
+      const delta = target - this.vx;
+      this.vx = Math.abs(delta) <= accel ? target : this.vx + Math.sign(delta) * accel;
+    } else {
+      this.vx = moveX * speed;
+    }
+    this.x = Math.max(this.options.worldBounds.minX, Math.min(this.options.worldBounds.maxX, this.x + (this.vx + this.recoilVx) * dt));
+    if (this.recoilVx !== 0) {
+      // Recoil bleeds off fast on grippy ground, slowly on slick surfaces, gently in the air.
+      const decayRate = this.onGround ? (groundProfile.traction < 0.6 ? 260 : 680) : 220;
+      const step = decayRate * dt;
+      if (Math.abs(this.recoilVx) <= step) this.recoilVx = 0;
+      else this.recoilVx -= Math.sign(this.recoilVx) * step;
+    }
 
     // 2. Jump input buffering and coyote time tracking
     if (jump) {
@@ -81,17 +173,17 @@ export class PlatformController {
 
     // 3. Initiate Jump
     if (this.jumpBufferTimer > 0 && this.coyoteTimer > 0 && !drop) {
-      this.vy = jumpForce;
-      this.onGround = false;
-      this.currentPlatformId = null;
+      const matProfile = PLATFORM_MATERIALS[this.currentMaterial];
+      this.vy = jumpForce * matProfile.jumpMultiplier;
+      this.lastBounceBoost = matProfile.jumpMultiplier > 1.05 ? 1 : 0;
+      this.leaveGround();
       this.coyoteTimer = 0;
       this.jumpBufferTimer = 0;
     }
 
     // 4. Drop-down through one-way platforms
     if (drop && this.onGround && this.currentPlatformId && this.currentPlatformId !== 'catwalk') {
-      this.onGround = false;
-      this.currentPlatformId = null;
+      this.leaveGround();
       this.y += 4;
       this.vy = 80;
     }
@@ -102,19 +194,23 @@ export class PlatformController {
         // Permanent floor is always solid
         this.y = this.options.floorY;
         this.vy = 0;
+        this.currentMaterial = 'metal';
+        this.craterDepth = 0;
+        this.surfaceSlope = 0;
       } else {
         const platform = this.options.platforms.find(p => p.id === this.currentPlatformId);
         const withinHorizontal = platform && this.x >= platform.x - 8 && this.x <= platform.x + platform.width + 8;
-        const stillSolid = platform && withinHorizontal && this.checkFootingSolid(platform.y);
+        const footing = platform && withinHorizontal ? this.sampleFootingStrata(platform) : null;
 
-        if (!stillSolid) {
+        if (!platform || !footing || !footing.solid) {
           // Platform was destroyed beneath player or player walked off ledge!
-          this.onGround = false;
-          this.currentPlatformId = null;
+          this.leaveGround();
           this.coyoteTimer = 0;
         } else {
-          this.y = platform.y;
+          this.y = platform.y + footing.depthOffset;
           this.vy = 0;
+          this.craterDepth = footing.depthOffset;
+          this.surfaceSlope = footing.slope;
         }
       }
     }
@@ -123,7 +219,12 @@ export class PlatformController {
     if (!this.onGround) {
       if (jump && !drop) {
         this.isJetpacking = true;
-        this.vy = Math.max(PLAYER_PHYSICS.maxClimbSpeed, this.vy + (gravity - PLAYER_PHYSICS.jetpackThrust) * dt);
+        if (this.lastBounceBoost > 0 && this.vy < PLAYER_PHYSICS.maxClimbSpeed) {
+          // Elastic bounce rises faster than the jetpack climbs: coast instead of snapping to the cap.
+          this.vy += gravity * dt;
+        } else {
+          this.vy = Math.max(PLAYER_PHYSICS.maxClimbSpeed, this.vy + (gravity - PLAYER_PHYSICS.jetpackThrust) * dt);
+        }
       } else {
         this.isJetpacking = false;
         this.vy = Math.min(this.vy + gravity * dt, maxFallSpeed);
@@ -147,6 +248,10 @@ export class PlatformController {
           this.onGround = true;
           this.isJetpacking = false;
           this.currentPlatformId = 'catwalk';
+          this.currentMaterial = 'metal';
+          this.craterDepth = 0;
+          this.surfaceSlope = 0;
+          this.lastBounceBoost = 0;
         } else if (!drop) {
           // Check destructible platforms, sorted from highest to lowest in collision path
           for (const platform of this.options.platforms) {
@@ -159,12 +264,17 @@ export class PlatformController {
 
             if (wasAbove && nowBelowOrAt && withinStep) {
               // Crucial step: verify whether the platform is intact in the CPU occupancy mask
-              if (this.checkFootingSolid(platform.y)) {
-                this.y = platform.y;
+              const footing = this.sampleFootingStrata(platform);
+              if (footing.solid) {
+                this.y = platform.y + footing.depthOffset;
                 this.vy = 0;
                 this.onGround = true;
                 this.isJetpacking = false;
                 this.currentPlatformId = platform.id;
+                this.currentMaterial = platform.material ?? 'paper';
+                this.craterDepth = footing.depthOffset;
+                this.surfaceSlope = footing.slope;
+                this.lastBounceBoost = 0;
                 break;
               }
               // If destroyed at this point, player naturally falls through the hole
@@ -186,11 +296,14 @@ export class PlatformController {
 
     for (const platform of this.options.platforms) {
       if (this.x >= platform.x - 6 && this.x <= platform.x + platform.width + 6) {
-        if (platform.y >= this.y - 2 && platform.y < groundY) {
-          if (this.checkFootingSolid(platform.y)) {
-            groundY = platform.y;
-            groundId = platform.id;
-          }
+        // Cheap reject: even the deepest stratum (y + 10) cannot beat the current best
+        if (platform.y + 10 < this.y - 2 || platform.y >= groundY) continue;
+        const footing = this.sampleFootingStrata(platform);
+        if (!footing.solid) continue;
+        const surfaceY = platform.y + footing.depthOffset;
+        if (surfaceY >= this.y - 2 && surfaceY < groundY) {
+          groundY = surfaceY;
+          groundId = platform.id;
         }
       }
     }
