@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { EMPTY_STATS, type Preferences, type SceneControls, type WeaponId } from '../game/bridge';
+import { EMPTY_STATS, type PlatformMaterial, type Preferences, type SceneControls, type WeaponId } from '../game/bridge';
+
+const MATERIAL_LABELS: Record<PlatformMaterial, string> = {
+  concrete: 'concreto',
+  metal: 'metal',
+  wood: 'madera',
+  glass: 'vidrio',
+  elastic: 'elástico',
+  paper: 'papel',
+};
 
 function readPreferences(): Preferences {
   const defaults = { muted: false, reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches };
@@ -339,7 +348,7 @@ export function App() {
           >
             <span className="weapon-slot-key">01</span>
             <WeaponIcon name="pistol" />
-            <div><strong>Pistola</strong><small>SEMIAUTOMÁTICA</small></div>
+            <div><strong>Pistola</strong><small>SEMIAUTOMÁTICA</small><span className="weapon-micro-tag">PWR 32 · PRECISIÓN</span></div>
             <span className="infinite" title="Munición infinita">∞</span>
           </button>
           <button
@@ -351,7 +360,7 @@ export function App() {
           >
             <span className="weapon-slot-key">02</span>
             <WeaponIcon name="shotgun" />
-            <div><strong>Escopeta</strong><small>DISPERSIÓN</small></div>
+            <div><strong>Escopeta</strong><small>DISPERSIÓN</small><span className="weapon-micro-tag">PWR 20×5 · CONO</span></div>
             <span className="infinite" title="Munición infinita">∞</span>
           </button>
           <button
@@ -363,7 +372,7 @@ export function App() {
           >
             <span className="weapon-slot-key">03</span>
             <WeaponIcon name="grenade" />
-            <div><strong>Granadas</strong><small>EXPLOSIVO</small></div>
+            <div><strong>Granadas</strong><small>EXPLOSIVO</small><span className="weapon-micro-tag">PWR 145 · METRALLA</span></div>
             <span className="infinite" title="Munición infinita">∞</span>
           </button>
           <button
@@ -375,7 +384,7 @@ export function App() {
           >
             <span className="weapon-slot-key">04</span>
             <WeaponIcon name="laser" />
-            <div><strong>Láser</strong><small>CONTINUO</small></div>
+            <div><strong>Láser</strong><small>CONTINUO</small><span className="weapon-micro-tag">PWR 24/s · TÉRMICO</span></div>
             <span className="infinite" title="Munición infinita">∞</span>
           </button>
           <button
@@ -387,7 +396,7 @@ export function App() {
           >
             <span className="weapon-slot-key">05</span>
             <WeaponIcon name="vortex" />
-            <div><strong>Vórtice</strong><small>SINGULARIDAD</small></div>
+            <div><strong>Vórtice</strong><small>SINGULARIDAD</small><span className="weapon-micro-tag">PWR 230 · ATRACCIÓN</span></div>
             <span className="infinite" title="Munición infinita">∞</span>
           </button>
         </div>
@@ -467,6 +476,26 @@ export function App() {
     <div className="below-scene">
       <div className="scene-meta-group">
         <p className="session-status" aria-live="polite"><span className="status-dot" />{stats.shots ? `${stats.shots} disparos · ${stats.hits} impactos` : 'Todo listo para hacer un poco de ruido.'}</p>
+        <span className="hud-pill hud-material" data-testid="material-pill" title="Material bajo los pies del operador">
+          🧱 {MATERIAL_LABELS[stats.currentMaterial ?? 'metal']}
+          {(stats.craterDepth ?? 0) > 0 && <small className="hud-crater">cráter {stats.craterDepth}px</small>}
+        </span>
+        {(stats.combo ?? 0) >= 2 && (
+          <span className="hud-pill hud-combo" data-testid="combo-pill">
+            🔥 COMBO x{stats.combo}
+          </span>
+        )}
+        {(stats.weapon === 'laser' || (stats.laserHeat ?? 0) > 0.05) && (() => {
+          const pct = Math.round((stats.laserHeat ?? 0) * 100);
+          return (
+            <span className={`hud-pill hud-heat ${pct >= 75 ? 'is-hot' : ''}`} data-testid="heat-pill">
+              <span>⚡ CALOR {pct}%</span>
+              <span className="heat-track" aria-hidden="true">
+                <span className="heat-fill" style={{ width: `${pct}%` }} />
+              </span>
+            </span>
+          );
+        })()}
         {pageMeta && (
           <div className="page-meta-pill" data-testid="page-meta-pill">
             <span>{pageMeta.platformsCount} {pageMeta.platformsCount === 1 ? 'piso' : 'pisos'}</span>
